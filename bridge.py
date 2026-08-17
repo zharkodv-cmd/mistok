@@ -274,7 +274,14 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                     shots_dir.mkdir(exist_ok=True)
                     out = shots_dir / name
                     out.write_bytes(data)
-                    print(f"[file] saved {out} ({len(data)} bytes)", flush=True)
+                    # PNG у системний буфер — щоб одразу ⌘V у чат/месенджер
+                    import subprocess
+                    subprocess.run(
+                        ["osascript", "-e",
+                         f'set the clipboard to (read (POSIX file "{out}") as «class PNGf»)'],
+                        capture_output=True, timeout=10,
+                    )
+                    print(f"[file] saved {out} ({len(data)} bytes) + clipboard", flush=True)
                 except Exception as e:
                     print(f"[file] save failed: {e}", flush=True)
                 continue

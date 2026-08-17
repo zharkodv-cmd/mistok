@@ -339,7 +339,7 @@ window.onmessage = (e) => {
   }
   if (m.type === "result") log(`[ok]  ${shortId(m.id)}`);
   else if (m.type === "error") log(`[err] ${shortId(m.id)} ${m.text}`);
-  else if (m.type === "file") log(`[shot] ${m.name} → Desktop/mistok-shots`);
+  else if (m.type === "file") log(`[shot] ${m.name} → буфер + mistok-shots`);
   else if (m.type === "log") {/* skip — would spam */}
 };
 
