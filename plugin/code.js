@@ -1,4 +1,4 @@
-const UI_SIZE = { open: { w: 320, h: 316 }, mini: { w: 126, h: 36 } };
+const UI_SIZE = { open: { w: 320, h: 342 }, mini: { w: 126, h: 36 } };
 figma.showUI(__html__, { width: UI_SIZE.open.w, height: UI_SIZE.open.h, title: "Mistok" });
 
 // відновити згорнутий стан з минулого запуску
@@ -23,6 +23,170 @@ function sendSelection() {
 }
 figma.on("selectionchange", sendSelection);
 sendSelection();
+
+// ─── selection ops (кнопки в UI) ─────────────────────────────────────────
+
+async function resolveVarValue(v) {
+  const col = await figma.variables.getVariableCollectionByIdAsync(v.variableCollectionId);
+  let val = v.valuesByMode[col.defaultModeId];
+  if (val && val.type === "VARIABLE_ALIAS") {
+    const t = await figma.variables.getVariableByIdAsync(val.id);
+    if (!t) return undefined;
+    const tc = await figma.variables.getVariableCollectionByIdAsync(t.variableCollectionId);
+    val = t.valuesByMode[tc.defaultModeId];
+  }
+  return val;
+}
+
+async function floatVarList() {
+  const out = [];
+  for (const v of await figma.variables.getLocalVariablesAsync("FLOAT")) {
+    const val = await resolveVarValue(v);
+    if (typeof val === "number") out.push({ v, val });
+  }
+  return out;
+}
+
+async function colorVarList() {
+  const out = [];
+  for (const v of await figma.variables.getLocalVariablesAsync("COLOR")) {
+    const val = await resolveVarValue(v);
+    if (val && val.r !== undefined) out.push({ v, r: val.r, g: val.g, b: val.b });
+  }
+  return out;
+}
+
+// точний збіг, інакше найближче в межах max(2, 10%); нічого підходящого → null
+function nearestNum(list, x) {
+  let best = null, bestD = Infinity;
+  for (const e of list) {
+    const d = Math.abs(e.val - x);
+    if (d < bestD) { bestD = d; best = e; }
+  }
+  if (best && bestD <= Math.max(2, x * 0.1)) return best;
+  return null;
+}
+
+// сума |ΔRGB|; ≤0.06 (~5/канал) вважаємо «нашим» кольором
+function nearestColor(list, c) {
+  let best = null, bestD = Infinity;
+  for (const e of list) {
+    const d = Math.abs(e.r - c.r) + Math.abs(e.g - c.g) + Math.abs(e.b - c.b);
+    if (d < bestD) { bestD = d; best = e; }
+  }
+  if (best && bestD <= 0.06) return best;
+  return null;
+}
+
+function walkAll(roots) {
+  const out = [];
+  for (const r of roots) {
+    out.push(r);
+    if (r.findAll) out.push(...r.findAll(() => true));
+  }
+  return out;
+}
+
+const AL_PROPS = ["itemSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft"];
+
+async function opVarsAL(roots, res) {
+  const floats = await floatVarList();
+  for (const n of walkAll(roots)) {
+    if (!n.layoutMode || n.layoutMode === "NONE") continue;
+    for (const p of AL_PROPS) {
+      const cur = n[p];
+      if (typeof cur !== "number" || cur === 0) continue;
+      if (n.boundVariables && n.boundVariables[p]) continue; // вже прив'язано
+      const m = nearestNum(floats, cur);
+      if (m) { n.setBoundVariable(p, m.v); res.changes.push(n.name + "." + p + ": " + cur + " → " + m.v.name); }
+      else res.skipped.push(n.name + "." + p + "=" + cur);
+    }
+  }
+}
+
+async function opVarsColor(roots, res) {
+  const colors = await colorVarList();
+  const floats = await floatVarList();
+  for (const n of walkAll(roots)) {
+    for (const prop of ["fills", "strokes"]) {
+      const paints = n[prop];
+      if (!Array.isArray(paints) || !paints.length) continue;
+      let arr = null;
+      for (let i = 0; i < paints.length; i++) {
+        const p = paints[i];
+        if (!p || p.type !== "SOLID" || p.visible === false) continue;
+        if (p.boundVariables && p.boundVariables.color) continue;
+        const m = nearestColor(colors, p.color);
+        if (m) {
+          arr = arr || JSON.parse(JSON.stringify(paints));
+          arr[i] = figma.variables.setBoundVariableForPaint(arr[i], "color", m.v);
+          res.changes.push(n.name + "." + prop + "[" + i + "] → " + m.v.name);
+        } else {
+          res.skipped.push(n.name + "." + prop + "[" + i + "]");
+        }
+      }
+      if (arr) n[prop] = arr;
+    }
+    // текст: fontSize / lineHeight — тільки точний збіг
+    if (n.type === "TEXT" && typeof n.fontName !== "symbol") {
+      try {
+        await figma.loadFontAsync(n.fontName);
+        if (typeof n.fontSize === "number" && !(n.boundVariables && n.boundVariables.fontSize)) {
+          const m = floats.find((e) => e.val === n.fontSize);
+          if (m) { n.setBoundVariable("fontSize", m.v); res.changes.push(n.name + ".fontSize → " + m.v.name); }
+        }
+        if (typeof n.lineHeight !== "symbol" && n.lineHeight.unit === "PIXELS" &&
+            !(n.boundVariables && n.boundVariables.lineHeight)) {
+          const m = floats.find((e) => e.val === n.lineHeight.value);
+          if (m) { n.setBoundVariable("lineHeight", m.v); res.changes.push(n.name + ".lineHeight → " + m.v.name); }
+        }
+      } catch (e) { res.skipped.push(n.name + " (font: " + ((e && e.message) || e) + ")"); }
+    }
+  }
+}
+
+async function opClean(roots, res) {
+  for (const n of walkAll(roots)) {
+    // піксельна сітка: цілі координати й розміри
+    if (typeof n.x === "number" && (n.x % 1 || n.y % 1)) {
+      n.x = Math.round(n.x); n.y = Math.round(n.y);
+      res.changes.push(n.name + ": x/y → ціле");
+    }
+    if (typeof n.resize === "function" && n.type !== "TEXT" &&
+        typeof n.width === "number" && (n.width % 1 || n.height % 1)) {
+      try { n.resize(Math.round(n.width), Math.round(n.height)); res.changes.push(n.name + ": w/h → ціле"); }
+      catch (e) {}
+    }
+  }
+  await opVarsAL(roots, res); // відступи/гапи → variables (250 тощо)
+}
+
+async function opRename(roots, res) {
+  const DEFAULT_RE = /^(Frame|Group|Rectangle|Ellipse|Polygon|Star|Line|Arrow|Vector|Section) \d+$/;
+  // розгрупування: GROUP з дефолтною назвою, найглибші перші (ungroup зберігає дітей)
+  const groups = [];
+  for (const n of walkAll(roots)) {
+    if (n.type === "GROUP" && DEFAULT_RE.test(n.name)) groups.push(n);
+  }
+  for (const g of groups.reverse()) {
+    try { figma.ungroup(g); res.changes.push("розгруповано " + g.name); }
+    catch (e) { res.skipped.push(g.name + " (ungroup)"); }
+  }
+  for (const n of walkAll(roots)) {
+    if (!DEFAULT_RE.test(n.name)) continue;
+    let name = null;
+    const t = n.findOne && n.findOne((c) => c.type === "TEXT" && c.characters.trim());
+    if (t) name = t.characters.trim().slice(0, 24);
+    else if (Array.isArray(n.fills) && n.fills.some((p) => p && p.type === "IMAGE")) name = "img";
+    else if (n.layoutMode === "HORIZONTAL") name = "row";
+    else if (n.layoutMode === "VERTICAL") name = "col";
+    else if (n.type === "RECTANGLE") name = "box";
+    if (name && name !== n.name) { res.changes.push(n.name + " → " + name); n.name = name; }
+  }
+}
+
+const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor };
+const OP_NAMES = { clean: "Clean", rename: "Rename", varsal: "AL→vars", varscolor: "Colors→vars" };
 
 function safeStringify(value) {
   if (value === undefined) return null;
@@ -290,6 +454,27 @@ const HELPERS = {
 // ──────────────────────────────────────────────────────────────────────────
 
 figma.ui.onmessage = async (msg) => {
+  if (msg.type === "op") {
+    const sel = figma.currentPage.selection;
+    if (!sel.length) { figma.notify("Нічого не виділено"); return; }
+    const fn = OPS[msg.kind];
+    if (!fn) return;
+    const res = { changes: [], skipped: [] };
+    try {
+      await fn(sel, res);
+      const summary = OP_NAMES[msg.kind] + ": " + res.changes.length + " змін" +
+        (res.skipped.length ? ", " + res.skipped.length + " пропущено" : "");
+      figma.notify(summary);
+      figma.ui.postMessage({
+        type: "opreport", kind: msg.kind, summary,
+        roots: sel.map((n) => ({ id: n.id, name: n.name })),
+        changes: res.changes.slice(0, 80), skipped: res.skipped.slice(0, 80),
+      });
+    } catch (e) {
+      figma.notify("Помилка " + OP_NAMES[msg.kind] + ": " + ((e && e.message) || e));
+    }
+    return;
+  }
   if (msg.type === "notify") {
     figma.notify(msg.text || "", { timeout: 5000 });
     return;

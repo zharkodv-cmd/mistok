@@ -294,7 +294,7 @@ README.md              This file
 
 ### Plugin panel
 
-The plugin window shows, top to bottom: Claude subscription limit bars (session / weekly, red as you approach the cap, `figma.notify` warning past 80%), the current selection (node id with **⧉** copy and **📷** export — PNG @2x saved to `~/Desktop/mistok-shots/` *and* placed on the system clipboard for instant ⌘V), today's Claude usage (session duration, project, messages, tokens — pushed by the bridge every 60 s from `~/.claude` transcripts), and a color-coded log where write-looking code is tagged `[exec✎]`. The `–` button collapses everything to a tiny status pill.
+The plugin window shows, top to bottom: Claude subscription limit bars (session / weekly, red as you approach the cap, `figma.notify` warning past 80%), the current selection (node id with **⧉** copy and **📷** export — PNG @2x saved to `~/Desktop/mistok-shots/` *and* placed on the system clipboard for instant ⌘V), one-click **selection ops** (🧹 Clean — snap to pixel grid + bind auto-layout values to nearest variables; ✏️ Rename — content-based names for default `Frame N` + ungroup default `Group N`; ⇥ AL — gaps/paddings → nearest FLOAT variables; 🎨 Colors — solid fills/strokes + text fontSize/lineHeight → nearest variables), today's Claude usage (session duration, project, messages, tokens — pushed by the bridge every 60 s from `~/.claude` transcripts), and a color-coded log where write-looking code is tagged `[exec✎]`. Op reports are appended to `/tmp/mistok-ops.log` (JSONL) so an AI session can review exactly what changed; every op is one ⌘Z to undo. The `–` button collapses everything to a tiny status pill.
 
 ## Contributing / extending
 

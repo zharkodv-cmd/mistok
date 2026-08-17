@@ -265,6 +265,16 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                 continue
             if mtype == "pong":
                 continue
+            if mtype == "opreport":
+                # звіт кнопок-операцій — лог для Claude-сесій
+                try:
+                    m["ts"] = datetime.now().astimezone().isoformat(timespec="seconds")
+                    with open("/tmp/mistok-ops.log", "a", encoding="utf-8") as f:
+                        f.write(json.dumps(m, ensure_ascii=False) + "\n")
+                    print(f"[op] {m.get('summary')}", flush=True)
+                except OSError as e:
+                    print(f"[op] log failed: {e}", flush=True)
+                continue
             if mtype == "file":
                 # plugin-side export (📷 button) — save to Desktop
                 name = os.path.basename(m.get("name") or "export.png")

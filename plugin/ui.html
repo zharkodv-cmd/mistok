@@ -69,7 +69,16 @@
     font-size: 10px; color: var(--dim); font-style: italic; flex: none;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  #summary:empty, #limits:empty, #sel:empty { display: none; }
+  #summary:empty, #limits:empty, #sel:empty, #ops:empty { display: none; }
+
+  #ops { display: flex; gap: 4px; flex: none; }
+  #ops:empty { display: none; }
+  #ops button {
+    flex: 1; border: 1px solid var(--border); background: var(--panel);
+    border-radius: 4px; color: var(--muted); cursor: pointer;
+    padding: 3px 0; font-size: 10px;
+  }
+  #ops button:hover { background: var(--bg); color: var(--text); }
 
   #sel {
     display: flex; align-items: center; gap: 6px; flex: none;
@@ -108,7 +117,8 @@
   body.mini .row { margin: 0; height: 36px; padding: 0 10px; gap: 6px; }
   body.mini:hover { background: var(--panel); }
   body.mini #log, body.mini #server, body.mini #status, body.mini #count,
-  body.mini #stats, body.mini #summary, body.mini #limits, body.mini #sel { display: none; }
+  body.mini #stats, body.mini #summary, body.mini #limits, body.mini #sel,
+  body.mini #ops { display: none; }
   body.mini #brand { display: inline; color: var(--muted); }
 </style>
 </head>
@@ -122,6 +132,7 @@
   </div>
   <div id="limits"></div>
   <div id="sel"></div>
+  <div id="ops"></div>
   <div id="stats">очікую статистику…</div>
   <div id="summary"></div>
   <pre id="log"></pre>
@@ -303,8 +314,30 @@ function flash(btn, glyph, revert) {
   btn.textContent = glyph;
   setTimeout(() => { btn.textContent = revert; }, 900);
 }
+const OP_BTNS = [
+  { kind: "clean", label: "🧹 Clean", title: "Цілі px + відступи/гапи → найближчі variables" },
+  { kind: "rename", label: "✏️ Rename", title: "Перейменувати дефолтні Frame N за вмістом, розгрупувати Group N" },
+  { kind: "varsal", label: "⇥ AL", title: "Auto-layout відступи/гапи → найближчі variables" },
+  { kind: "varscolor", label: "🎨 Colors", title: "Кольори/текст → найближчі variables" },
+];
+function renderOps(show) {
+  const el = document.getElementById("ops");
+  if (!show) { el.innerHTML = ""; return; }
+  el.innerHTML = OP_BTNS.map((b) =>
+    '<button data-kind="' + b.kind + '" title="' + b.title + '">' + b.label + "</button>").join("");
+  el.querySelectorAll("button").forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      parent.postMessage({ pluginMessage: { type: "op", kind: btn.dataset.kind } }, "*");
+      const orig = btn.textContent;
+      flash(btn, "⏳", orig);
+    };
+  });
+}
+
 function renderSel(m) {
   const el = document.getElementById("sel");
+  renderOps(m.nodes && m.nodes.length);
   if (!m.nodes || !m.nodes.length) { el.innerHTML = ""; return; }
   const n = m.nodes[0];
   const more = m.total > 1 ? " +" + (m.total - 1) : "";
@@ -357,6 +390,7 @@ window.onmessage = (e) => {
   if (m.type === "result") log(`[ok]  ${shortId(m.id)}`);
   else if (m.type === "error") log(`[err] ${shortId(m.id)} ${m.text}`);
   else if (m.type === "file") log(`[shot] ${m.name} → буфер + mistok-shots`);
+  else if (m.type === "opreport") log(`[op] ${m.summary}`);
   else if (m.type === "log") {/* skip — would spam */}
 };
 
