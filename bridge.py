@@ -553,6 +553,168 @@ async def run_protocol(phrase: str, label: str, timeout_s: int = 900, model: str
         RUNNING.pop(kind, None)
         print(f"[proto-run] failed: {e}", flush=True)
 
+
+def _freepik_key():
+    envf = Path.home() / "Code" / "mistok" / ".env"
+    try:
+        for line in envf.read_text().splitlines():
+            if line.startswith("FREEPIK_API_KEY="):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return None
+
+
+BAD_TITLE = ("3d", "render", "generative", "ai image", "miniature", "toy", "lineart",
+             "drawing", "illustration", "cartoon", "vector")
+
+
+async def run_images(request: dict):
+    """Auto image fill: Freepik search -> haiku ranking -> download -> insert."""
+    kind = "imggen"
+    slots = request.get("slots") or []
+    key = _freepik_key()
+    if not key:
+        await send_plugin({"type": "chatreply", "task": kind,
+            "text": "Request saved. For one-click mode add FREEPIK_API_KEY to mistok env file "
+                    "(free key: freepik.com/developers). For now tell Claude in a session: insert the images"})
+        return
+    if not slots:
+        await send_plugin({"type": "chatreply", "task": kind, "text": "no slots in the request"})
+        return
+    print(f"[imggen] start: {len(slots)} slots", flush=True)
+    import aiohttp
+    try:
+        groups = {}
+        for s in slots:
+            sig = " | ".join(s.get("context") or [])[:120] or s.get("name", "photo")
+            groups.setdefault(sig, []).append(s)
+        await send_plugin({"type": "chatstatus", "task": kind,
+                           "text": f"searching photos: {len(groups)} themes / {len(slots)} slots…"})
+        group_cands = []
+        async with aiohttp.ClientSession(headers={"x-freepik-api-key": key}) as http:
+            for sig, ss in groups.items():
+                q = sig.split("|")[0].strip()[:60] or "aviation"
+                ar = ss[0]["w"] / max(ss[0]["h"], 1)
+                orient = "landscape" if ar > 1.25 else ("portrait" if ar < 0.8 else "square")
+                params = {"term": q, "limit": "30", "page": "1",
+                          "filters[content_type][photo]": "1",
+                          "filters[orientation][" + orient + "]": "1",
+                          "filters[ai-generated][excluded]": "1"}
+                async with http.get("https://api.freepik.com/v1/resources", params=params, timeout=30) as r:
+                    data = await r.json()
+                items = data.get("data") or []
+                cands = []
+                for it in items:
+                    title = (it.get("title") or "").lower()
+                    if any(b in title for b in BAD_TITLE):
+                        continue
+                    cands.append({"id": it.get("id"), "title": it.get("title")})
+                group_cands.append({"sig": sig, "slots": ss, "cands": cands[:15]})
+
+        import shutil
+        env = dict(os.environ)
+        env["PATH"] = env.get("PATH", "") + f":{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+        claude = shutil.which("claude", path=env["PATH"])
+        ranked = None
+        if claude and any(g["cands"] for g in group_cands):
+            prompt = (
+                "Rank stock photo candidates for premium aviation-brand cards. For each group pick the best "
+                "distinct photos (real photography feel, no stock cliches), enough to cover need. "
+                'Return ONLY JSON: {"groups":[{"i":<group index>,"ids":[<candidate ids in order>]}]}. Data: '
+                + json.dumps([{"i": i, "context": g["sig"], "need": len(g["slots"]),
+                               "candidates": g["cands"]} for i, g in enumerate(group_cands)],
+                             ensure_ascii=False)
+            )
+            proc = await asyncio.create_subprocess_exec(
+                claude, "-p", prompt, "--model", "haiku", "--dangerously-skip-permissions",
+                cwd=str(Path.home()), env=env,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            RUNNING[kind] = proc
+            try:
+                out, _e = await asyncio.wait_for(proc.communicate(), timeout=120)
+                raw = out.decode("utf-8", "replace")
+                s0, e0 = raw.find("{"), raw.rfind("}")
+                if s0 != -1:
+                    ranked = {g["i"]: g["ids"] for g in json.loads(raw[s0:e0 + 1]).get("groups", [])}
+            except (asyncio.TimeoutError, json.JSONDecodeError, KeyError, TypeError):
+                ranked = None
+            finally:
+                RUNNING.pop(kind, None)
+
+        import base64 as b64mod
+        import subprocess
+        import tempfile
+        done = 0
+        used = set()
+        async with aiohttp.ClientSession(headers={"x-freepik-api-key": key}) as http:
+            for gi, g in enumerate(group_cands):
+                order = (ranked or {}).get(gi) or [c["id"] for c in g["cands"]]
+                queue = [i for i in order if i not in used]
+                for slot in g["slots"]:
+                    rid = queue.pop(0) if queue else None
+                    if rid is None:
+                        continue
+                    used.add(rid)
+                    await send_plugin({"type": "chatstatus", "task": kind,
+                                       "text": f"inserting {done + 1}/{len(slots)}…"})
+                    try:
+                        async with http.get(f"https://api.freepik.com/v1/resources/{rid}/download",
+                                            timeout=30) as r:
+                            dl = await r.json()
+                        url = ((dl.get("data") or {}).get("url")) or dl.get("url")
+                        if not url:
+                            continue
+                        async with http.get(url, timeout=60) as r:
+                            body = await r.read()
+                        tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False).name
+                        open(tmp, "wb").write(body)
+                        subprocess.run(["sips", "-Z", "2048", tmp, "--out", tmp],
+                                       capture_output=True, timeout=60)
+                        img_b64 = b64mod.b64encode(open(tmp, "rb").read()).decode()
+                        os.unlink(tmp)
+                        code = (
+                            f"const n = await figma.getNodeByIdAsync('{slot['id']}');"
+                            "if (!n) return 'missing';"
+                            f"const img = figma.createImage(figma.base64Decode('{img_b64}'));"
+                            "n.fills = [{type: 'IMAGE', imageHash: img.hash, scaleMode: 'FILL'}];"
+                            "return 'ok';")
+                        resp = await asyncio.to_thread(
+                            urllib_request_json, "http://127.0.0.1:8787/exec",
+                            {"code": code, "timeout": 60})
+                        if resp.get("ok"):
+                            done += 1
+                    except Exception as e:
+                        print(f"[imggen] slot fail: {e}", flush=True)
+        img_uri = None
+        fid = (request.get("frame") or {}).get("id")
+        if fid and done:
+            code = (
+                f"const n = await figma.getNodeByIdAsync('{fid}');"
+                "if (!n) return null;"
+                "const scale = Math.min(1, 640 / Math.max(n.width, 1));"
+                "const bytes = await n.exportAsync({format: 'PNG', constraint: {type: 'SCALE', value: scale}});"
+                "figma.commitUndo(); return figma.base64Encode(bytes);")
+            try:
+                resp = await asyncio.to_thread(
+                    urllib_request_json, "http://127.0.0.1:8787/exec", {"code": code, "timeout": 60})
+                if resp.get("ok") and isinstance(resp.get("value"), str) and len(resp["value"]) < 3_500_000:
+                    img_uri = "data:image/png;base64," + resp["value"]
+            except Exception:
+                pass
+        payload = {"type": "chatreply", "task": kind,
+                   "text": f"inserted {done}/{len(slots)} photos ({len(groups)} themes, Freepik)"}
+        if img_uri:
+            payload["img"] = img_uri
+        await send_plugin(payload)
+        print(f"[imggen] done {done}/{len(slots)}", flush=True)
+    except Exception as e:
+        RUNNING.pop(kind, None)
+        await send_plugin({"type": "chatreply", "task": kind, "text": f"image fill failed: {e}"})
+        print(f"[imggen] failed: {e}", flush=True)
+
+
 async def stats_pusher(ws: web.WebSocketResponse):
     """Push usage stats to the plugin UI every 60s while it's connected."""
     try:
@@ -719,8 +881,7 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                     with open("/tmp/mistok-image-request.json", "w", encoding="utf-8") as f:
                         json.dump(req, f, ensure_ascii=False, indent=1)
                     print(f"[img] request: {len(req.get('slots') or [])} slots → /tmp/mistok-image-request.json", flush=True)
-                    await ws.send_str(json.dumps({"type": "chatreply",
-                        "text": "✨ Request for " + str(len(req.get('slots') or [])) + " images is ready.\nTell Claude in a session: insert the images"}))
+                    asyncio.create_task(run_images(req))
                 except OSError as e:
                     print(f"[img] request failed: {e}", flush=True)
                 continue

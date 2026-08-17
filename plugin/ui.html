@@ -669,7 +669,8 @@ window.onmessage = (e) => {
     endTask("op:" + m.kind);
     // фонова вичитка триває після opreport — тримаємо лоадер до chatreply
     const BG_LABELS = { spell: "spellchecking (Claude)…", autolayout: "auto-layout planning (Claude)…",
-      recreate: "recreating design (Claude)…", redesign: "redesigning (Claude)…", prototype: "building prototype (Claude)…" };
+      recreate: "recreating design (Claude)…", redesign: "redesigning (Claude)…", prototype: "building prototype (Claude)…",
+      imggen: "fetching photos (Freepik)…" };
     if (BG_LABELS[m.kind] && !m.error) startTask("bg:" + m.kind, BG_LABELS[m.kind]);
   }
   else if (m.type === "log") {/* skip — would spam */}
