@@ -172,7 +172,7 @@ def _claude_usage():
 CHAT_BUSY = False
 
 
-async def run_chat(ws: web.WebSocketResponse, text: str):
+async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effort: str = None):
     """Headless Claude Code turn triggered from the plugin's chat input."""
     global CHAT_BUSY
     if CHAT_BUSY:
@@ -187,12 +187,19 @@ async def run_chat(ws: web.WebSocketResponse, text: str):
         if not claude:
             await ws.send_str(json.dumps({"type": "chatreply", "text": "claude CLI не знайдено в PATH"}))
             return
-        await ws.send_str(json.dumps({"type": "chatstatus", "text": "думаю…"}))
+        opts = []
+        if model:
+            opts += ["--model", model]
+        if effort:
+            opts += ["--effort", effort]
+        label = " · ".join(filter(None, [model, effort]))
+        await ws.send_str(json.dumps({"type": "chatstatus",
+                                      "text": "думаю…" + (f" ({label})" if label else "")}))
         cwd = str(Path.home() / "Code" / "mistok")
 
         async def attempt(extra):
             proc = await asyncio.create_subprocess_exec(
-                claude, "-p", text, "--dangerously-skip-permissions", *extra,
+                claude, "-p", text, "--dangerously-skip-permissions", *opts, *extra,
                 cwd=cwd, env=env,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
@@ -417,7 +424,7 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                 if text.startswith(("http://", "https://")) and " " not in text:
                     asyncio.create_task(run_import(ws, text))  # лінк = веб-імпорт
                 else:
-                    asyncio.create_task(run_chat(ws, text))
+                    asyncio.create_task(run_chat(ws, text, m.get("model"), m.get("effort")))
                 continue
             if mtype == "spellrequest":
                 asyncio.create_task(run_spell(ws, m.get("texts") or []))

@@ -126,12 +126,18 @@
   }
   #chatOut.open { display: block; }
   #chatOut.thinking { color: var(--muted); font-style: italic; }
-  #chatRow { flex: none; }
+  #chatRow { flex: none; display: flex; gap: 5px; }
   #chatIn {
-    width: 100%; background: var(--panel); border: 1px solid var(--border);
+    flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--border);
     border-radius: 6px; color: var(--text); font-size: 11px; padding: 6px 8px;
     font-family: inherit;
   }
+  #chatRow select {
+    flex: none; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--muted); font-size: 10px; padding: 0 4px;
+    font-family: ui-monospace, monospace; max-width: 92px;
+  }
+  #chatRow select:focus { outline: none; border-color: rgba(125,211,252,.4); }
   #chatIn:focus { outline: none; border-color: rgba(125,211,252,.4); }
   #chatIn::placeholder { color: var(--dim); }
 
@@ -147,6 +153,13 @@
   }
   @keyframes busyslide { to { left: 100%; } }
   body.mini #busy { display: none; }
+  #tasks {
+    display: none; font-family: ui-monospace, monospace; font-size: 10px;
+    color: var(--accent); flex: none;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #tasks.on { display: block; }
+  body.mini #tasks { display: none; }
 
   /* миттєвий тултіп: коротка назва дії */
   [data-tip] { position: relative; }
@@ -178,6 +191,7 @@
     <button id="toggle" title="Згорнути / розгорнути">–</button>
   </div>
   <div id="busy"></div>
+  <div id="tasks"></div>
   <div id="limits"></div>
   <div id="sel"></div>
   <div id="ops"></div>
@@ -191,6 +205,19 @@
   <div id="chatOut"></div>
   <div id="chatRow">
     <input id="chatIn" type="text" placeholder="Спитай Claude… (Enter)">
+    <select id="mSel" title="Модель для чат-задач">
+      <option value="">model: авто</option>
+      <option value="haiku">haiku</option>
+      <option value="sonnet">sonnet</option>
+      <option value="opus">opus</option>
+      <option value="claude-fable-5">fable</option>
+    </select>
+    <select id="eSel" title="Effort для чат-задач">
+      <option value="">effort: авто</option>
+      <option value="low">low</option>
+      <option value="medium">medium</option>
+      <option value="high">high</option>
+    </select>
   </div>
 
 <script>
@@ -219,27 +246,36 @@ function shortId(id) {
   return id ? String(id).slice(0, 8) : "?";
 }
 
-// ── лоадер ───────────────────────────────────────────────────────────────
-let busyCount = 0;
+// ── лоадер з чергою задач ────────────────────────────────────────────────
+const activeTasks = new Map(); // key → label
 let busySince = 0;
-function busy(delta) {
-  busyCount = Math.max(0, busyCount + delta);
-  const el = document.getElementById("busy");
-  if (busyCount > 0) {
+function renderTasks() {
+  const bar = document.getElementById("busy");
+  const line = document.getElementById("tasks");
+  const labels = [...activeTasks.values()];
+  if (labels.length) {
     busySince = Date.now();
-    el.classList.add("on");
+    bar.classList.add("on");
+    line.classList.add("on");
+    line.textContent = "▸ " + labels[0] + (labels.length > 1 ? "  ·  у черзі: " + (labels.length - 1) : "");
     statusEl.textContent = "виконую…";
   } else {
-    // мінімум 700мс видимості — швидкі операції теж помітні
     const wait = Math.max(0, 700 - (Date.now() - busySince));
     setTimeout(() => {
-      if (busyCount === 0) {
-        el.classList.remove("on");
+      if (!activeTasks.size) {
+        bar.classList.remove("on");
+        line.classList.remove("on");
         if (ws && ws.readyState === WebSocket.OPEN) statusEl.textContent = "connected";
       }
     }, wait);
   }
+  fitHeight();
 }
+function startTask(key, label) { activeTasks.set(key, label); renderTasks(); }
+function updateTask(key, label) { if (activeTasks.has(key)) { activeTasks.set(key, label); renderTasks(); } }
+function endTask(key) { if (activeTasks.delete(key)) renderTasks(); }
+// сумісність зі старими викликами busy(±1) для чат-потоку
+function busy() {}
 
 // ── Claude usage stats (pushed by bridge every 60s) ─────────────────────
 function fmtTok(n) {
@@ -336,9 +372,11 @@ function connect() {
     } else if (msg.type === "stats") {
       renderStats(msg);
     } else if (msg.type === "chatstatus") {
+      updateTask("chat", msg.text);
       chatShow(msg.text, true);
     } else if (msg.type === "chatreply") {
-      busy(-1);
+      endTask("chat");
+      endTask("bg:spell");
       chatShow(msg.text, false);
     } else if (msg.type === "ping") {
       try { ws.send(JSON.stringify({ type: "pong" })); } catch (e) {}
@@ -376,14 +414,24 @@ function chatShow(text, thinking) {
   chatOut.classList.toggle("thinking", !!thinking);
   fitHeight();
 }
+const mSel = document.getElementById("mSel");
+const eSel = document.getElementById("eSel");
+// зберігаємо вибір через clientStorage (code.js)
+function savePrefs() {
+  parent.postMessage({ pluginMessage: { type: "prefs", model: mSel.value, effort: eSel.value } }, "*");
+}
+mSel.onchange = savePrefs;
+eSel.onchange = savePrefs;
+
 chatIn.onkeydown = (e) => {
   if (e.key !== "Enter") return;
   const text = chatIn.value.trim();
   if (!text) return;
   if (!ws || ws.readyState !== WebSocket.OPEN) { chatShow("bridge не підключений", false); return; }
-  ws.send(JSON.stringify({ type: "chat", text }));
+  ws.send(JSON.stringify({ type: "chat", text, model: mSel.value || null, effort: eSel.value || null }));
   chatIn.value = "";
-  busy(1);
+  const isUrl = text.startsWith("http://") || text.startsWith("https://");
+  startTask("chat", isUrl ? "імпорт сторінки…" : "Claude: " + text.slice(0, 28) + "…");
   chatShow("думаю…", true);
 };
 
@@ -457,7 +505,7 @@ function renderOps(show) {
         return;
       }
       parent.postMessage({ pluginMessage: { type: "op", kind: btn.dataset.kind } }, "*");
-      busy(1);
+      startTask("op:" + btn.dataset.kind, (OP_BTNS.find((b) => b.kind === btn.dataset.kind) || {}).tip + "…");
       flash(btn, ICONS.wait, ICONS[btn.dataset.kind]);
     };
   });
@@ -550,6 +598,11 @@ window.onmessage = (e) => {
   const m = e.data && e.data.pluginMessage;
   if (!m) return;
   if (m.type === "uistate") { setMini(!!m.mini, false); return; }
+  if (m.type === "prefsstate") {
+    if (m.model != null) mSel.value = m.model;
+    if (m.effort != null) eSel.value = m.effort;
+    return;
+  }
   if (m.type === "selection") { renderSel(m); return; }
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     log(`[drop] ws not open, ${m.type} id=${shortId(m.id)}`);
@@ -563,9 +616,9 @@ window.onmessage = (e) => {
   else if (m.type === "error") log(`[err] ${shortId(m.id)} ${m.text}`);
   else if (m.type === "file") log(`[shot] ${m.name} → буфер + mistok-shots`);
   else if (m.type === "opreport") {
-    busy(-1);
+    endTask("op:" + m.kind);
     // фонова вичитка триває після opreport — тримаємо лоадер до chatreply
-    if (m.kind === "spell" && !m.error) busy(1);
+    if (m.kind === "spell" && !m.error) startTask("bg:spell", "вичитка текстів (Claude)…");
   }
   else if (m.type === "log") {/* skip — would spam */}
 };

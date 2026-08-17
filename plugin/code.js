@@ -1,7 +1,7 @@
 const UI_SIZE = { open: { w: 320, h: 236 }, mini: { w: 126, h: 36 } };
 figma.showUI(__html__, { width: UI_SIZE.open.w, height: UI_SIZE.open.h, title: "Mistok" });
 
-// відновити згорнутий стан з минулого запуску
+// відновити згорнутий стан і префи з минулого запуску
 let isMini = false;
 (async () => {
   try {
@@ -11,6 +11,9 @@ let isMini = false;
       figma.ui.resize(UI_SIZE.mini.w, UI_SIZE.mini.h);
       figma.ui.postMessage({ type: "uistate", mini: true });
     }
+    const model = await figma.clientStorage.getAsync("mistok:model");
+    const effort = await figma.clientStorage.getAsync("mistok:effort");
+    if (model || effort) figma.ui.postMessage({ type: "prefsstate", model: model || "", effort: effort || "" });
   } catch (e) {}
 })();
 
@@ -900,6 +903,13 @@ const HELPERS = {
 // ──────────────────────────────────────────────────────────────────────────
 
 figma.ui.onmessage = async (msg) => {
+  if (msg.type === "prefs") {
+    try {
+      await figma.clientStorage.setAsync("mistok:model", msg.model || "");
+      await figma.clientStorage.setAsync("mistok:effort", msg.effort || "");
+    } catch (e) {}
+    return;
+  }
   if (msg.type === "undo") {
     figma.triggerUndo();
     figma.notify("↩ відкат");
