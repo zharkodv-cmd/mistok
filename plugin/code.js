@@ -1,4 +1,4 @@
-const UI_SIZE = { open: { w: 320, h: 290 }, mini: { w: 126, h: 36 } };
+const UI_SIZE = { open: { w: 320, h: 316 }, mini: { w: 126, h: 36 } };
 figma.showUI(__html__, { width: UI_SIZE.open.w, height: UI_SIZE.open.h, title: "Mistok" });
 
 // відновити згорнутий стан з минулого запуску
@@ -11,6 +11,18 @@ figma.showUI(__html__, { width: UI_SIZE.open.w, height: UI_SIZE.open.h, title: "
     }
   } catch (e) {}
 })();
+
+// поточне виділення → UI (рядок з id + copy)
+function sendSelection() {
+  const all = figma.currentPage.selection;
+  const nodes = all.slice(0, 10).map((n) => ({
+    id: n.id, name: n.name, type: n.type,
+    w: Math.round(n.width || 0), h: Math.round(n.height || 0),
+  }));
+  figma.ui.postMessage({ type: "selection", nodes, total: all.length });
+}
+figma.on("selectionchange", sendSelection);
+sendSelection();
 
 function safeStringify(value) {
   if (value === undefined) return null;
@@ -278,6 +290,24 @@ const HELPERS = {
 // ──────────────────────────────────────────────────────────────────────────
 
 figma.ui.onmessage = async (msg) => {
+  if (msg.type === "notify") {
+    figma.notify(msg.text || "", { timeout: 5000 });
+    return;
+  }
+  if (msg.type === "shotsel") {
+    const sel = figma.currentPage.selection;
+    if (!sel.length) { figma.notify("Нічого не виділено"); return; }
+    const n = sel[0];
+    try {
+      const bytes = await n.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 } });
+      const name = (n.name || "node").replace(/[^\wЀ-ӿ-]+/g, "-").slice(0, 40) + ".png";
+      figma.ui.postMessage({ type: "file", name, b64: figma.base64Encode(bytes) });
+      figma.notify("PNG → Desktop: " + name);
+    } catch (e) {
+      figma.notify("Експорт не вдався: " + ((e && e.message) || e));
+    }
+    return;
+  }
   if (msg.type === "ui") {
     const s = msg.mini ? UI_SIZE.mini : UI_SIZE.open;
     figma.ui.resize(s.w, s.h);

@@ -16,6 +16,7 @@ Commands:
     mistok shot <id> out.png [--scale 2]   # export node as PNG to local file
     mistok spec <id> [--depth N]    # compact design spec (geometry, fills, typography)
     mistok vars                     # dump local variables by collection
+    mistok sel                      # current selection in Figma (ids, names, sizes)
     mistok "<js>"                   # shorthand for `exec`
 
 Helpers available inside exec'd code (as `h.*`):
@@ -42,7 +43,7 @@ PORT = 8787
 KNOWN_CMDS = {
     "exec", "status", "tree", "find", "text", "variant",
     "clone", "rm", "import-component", "icomp",
-    "shot", "spec", "vars",
+    "shot", "spec", "vars", "sel",
 }
 
 
@@ -274,6 +275,19 @@ def cmd_spec(args):
     return 0
 
 
+def cmd_sel(args):
+    code = (
+        "return figma.currentPage.selection.map(n => ({"
+        "id: n.id, name: n.name, type: n.type,"
+        "w: Math.round(n.width || 0), h: Math.round(n.height || 0)}));"
+    )
+    _status, resp = _exec(code, args.timeout)
+    if not resp.get("ok"):
+        return _emit(resp)
+    print(json.dumps(resp["value"], ensure_ascii=False, separators=(",", ":")))
+    return 0
+
+
 def cmd_vars(args):
     _status, resp = _exec("return await h.varsDump();", args.timeout)
     if not resp.get("ok"):
@@ -362,6 +376,9 @@ def build_parser():
     p_vars = sub.add_parser("vars")
     _add_common_flags(p_vars)
 
+    p_sel = sub.add_parser("sel")
+    _add_common_flags(p_sel)
+
     return ap
 
 
@@ -399,6 +416,7 @@ def main():
         "shot": cmd_shot,
         "spec": cmd_spec,
         "vars": cmd_vars,
+        "sel": cmd_sel,
     }
     sys.exit(dispatch[args.cmd](args))
 

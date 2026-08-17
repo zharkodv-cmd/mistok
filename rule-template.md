@@ -18,6 +18,7 @@
 | Design context of a node | `mistok spec <nodeId> [--depth N]` — compact JSON: geometry, auto-layout, fills/strokes as hex or `var(name)`, typography, effects, layout `grids`, `IMAGE:<hash>` fills |
 | Screenshot | `mistok shot <nodeId> out.png [--scale 2]` — PNG straight to file, no base64 in context |
 | Design tokens / variables | `mistok vars` — all local variables by collection, aliases as `→name` |
+| What the user selected in Figma («цей фрейм», «ця секція») | `mistok sel` — ids/names/sizes of the current selection |
 | Find / edit text / variants / clone | `mistok find | text | variant | clone | rm | icomp` |
 | Anything else | `mistok exec "<js>"` (or `--file script.js`) |
 

@@ -16,9 +16,12 @@ Run:
 
 import argparse
 import asyncio
+import base64
 import json
+import os
 import time
 import uuid
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from aiohttp import web, WSMsgType
@@ -28,6 +31,8 @@ PENDING: dict = {}        # rid -> {"future", "logs", "t0"}
 PLUGIN_WS: web.WebSocketResponse | None = None
 START_TIME = time.time()
 EXEC_COUNT = 0
+EXEC_ERRORS = 0
+EXEC_TIMES: deque = deque(maxlen=50)
 
 _usage_cache = {"t": 0.0, "data": None}
 _token_cache = {"t": 0.0, "token": None}
@@ -174,6 +179,8 @@ async def stats_pusher(ws: web.WebSocketResponse):
                 "type": "stats",
                 "uptime_s": int(time.time() - START_TIME),
                 "execs": EXEC_COUNT,
+                "errors": EXEC_ERRORS,
+                "avg_ms": int(sum(EXEC_TIMES) / len(EXEC_TIMES)) if EXEC_TIMES else None,
                 "claude": usage,
                 "limits": limits,
             }))
@@ -258,6 +265,17 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                 continue
             if mtype == "pong":
                 continue
+            if mtype == "file":
+                # plugin-side export (📷 button) — save to Desktop
+                name = os.path.basename(m.get("name") or "export.png")
+                try:
+                    data = base64.b64decode(m.get("b64") or "")
+                    out = Path.home() / "Desktop" / name
+                    out.write_bytes(data)
+                    print(f"[file] saved {out} ({len(data)} bytes)", flush=True)
+                except Exception as e:
+                    print(f"[file] save failed: {e}", flush=True)
+                continue
 
             rid = m.get("id")
             entry = PENDING.get(rid)
@@ -323,8 +341,11 @@ async def exec_handler(request: web.Request) -> web.Response:
 
     entry = PENDING.pop(rid)
     elapsed_ms = int((time.time() - entry["t0"]) * 1000)
+    EXEC_TIMES.append(elapsed_ms)
 
     if result.get("type") == "error":
+        global EXEC_ERRORS
+        EXEC_ERRORS += 1
         error_text = result.get("text", "unknown error")
         return web.json_response(
             {
