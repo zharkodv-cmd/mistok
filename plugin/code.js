@@ -2,10 +2,12 @@ const UI_SIZE = { open: { w: 320, h: 236 }, mini: { w: 126, h: 36 } };
 figma.showUI(__html__, { width: UI_SIZE.open.w, height: UI_SIZE.open.h, title: "Mistok" });
 
 // відновити згорнутий стан з минулого запуску
+let isMini = false;
 (async () => {
   try {
     const mini = await figma.clientStorage.getAsync("mistok:mini");
     if (mini) {
+      isMini = true;
       figma.ui.resize(UI_SIZE.mini.w, UI_SIZE.mini.h);
       figma.ui.postMessage({ type: "uistate", mini: true });
     }
@@ -494,9 +496,16 @@ figma.ui.onmessage = async (msg) => {
     return;
   }
   if (msg.type === "ui") {
+    isMini = !!msg.mini;
     const s = msg.mini ? UI_SIZE.mini : UI_SIZE.open;
     figma.ui.resize(s.w, s.h);
     try { await figma.clientStorage.setAsync("mistok:mini", !!msg.mini); } catch (e) {}
+    return;
+  }
+  if (msg.type === "resize") {
+    if (!isMini && typeof msg.h === "number") {
+      figma.ui.resize(UI_SIZE.open.w, Math.max(90, Math.min(500, Math.round(msg.h))));
+    }
     return;
   }
   if (msg.type !== "exec") return;

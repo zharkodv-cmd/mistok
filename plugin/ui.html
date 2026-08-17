@@ -348,10 +348,20 @@ function setMini(next, tell) {
 }
 
 // авто-висота: вікно підганяється під контент
+// (scrollHeight body завжди ≥ висоти вікна, тому міряємо низ останнього видимого блока)
+function contentHeight() {
+  let max = 0;
+  for (const el of document.body.children) {
+    if (el.tagName === "SCRIPT") continue;
+    const r = el.getBoundingClientRect();
+    if (r.height > 0) max = Math.max(max, r.bottom);
+  }
+  return Math.ceil(max + 8); // нижній padding
+}
 function fitHeight() {
   if (mini) return;
   requestAnimationFrame(() => {
-    parent.postMessage({ pluginMessage: { type: "resize", h: document.body.scrollHeight } }, "*");
+    parent.postMessage({ pluginMessage: { type: "resize", h: contentHeight() } }, "*");
   });
 }
 
