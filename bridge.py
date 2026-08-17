@@ -19,11 +19,114 @@ import asyncio
 import json
 import time
 import uuid
+from datetime import datetime
+from pathlib import Path
 from aiohttp import web, WSMsgType
 
 
 PENDING: dict = {}        # rid -> {"future", "logs", "t0"}
 PLUGIN_WS: web.WebSocketResponse | None = None
+START_TIME = time.time()
+EXEC_COUNT = 0
+
+_usage_cache = {"t": 0.0, "data": None}
+
+
+def _claude_usage():
+    """Today's Claude Code usage from ~/.claude/projects JSONL transcripts. Cached 60s."""
+    now = time.time()
+    if _usage_cache["data"] is not None and now - _usage_cache["t"] < 60:
+        return _usage_cache["data"]
+
+    root = Path.home() / ".claude" / "projects"
+    today = datetime.now().astimezone().date()
+    msgs = in_tok = out_tok = 0
+    latest_file, latest_mtime = None, 0.0
+
+    for p in root.glob("*/*.jsonl"):
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > latest_mtime:
+            latest_mtime, latest_file = mtime, p
+        if now - mtime > 26 * 3600:  # only files touched within ~a day
+            continue
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if '"usage"' not in line:
+                        continue
+                    try:
+                        e = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    ts = e.get("timestamp")
+                    u = (e.get("message") or {}).get("usage")
+                    if not ts or not u:
+                        continue
+                    try:
+                        d = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone().date()
+                    except ValueError:
+                        continue
+                    if d != today:
+                        continue
+                    msgs += 1
+                    in_tok += (u.get("input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0)
+                    out_tok += u.get("output_tokens") or 0
+        except OSError:
+            continue
+
+    # live session: duration (first→last timestamp), project name, last summary line
+    session_min = None
+    project = None
+    summary = None
+    if latest_file and now - latest_mtime < 30 * 60:
+        name = latest_file.parent.name  # e.g. -Users-x-Code-iflight-coast
+        project = name.split("-Code-", 1)[-1] if "-Code-" in name else name
+        first_ts = last_ts = None
+        try:
+            with open(latest_file, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if '"type":"summary"' in line:
+                        try:
+                            summary = json.loads(line).get("summary") or summary
+                        except json.JSONDecodeError:
+                            pass
+                    i = line.find('"timestamp":"')
+                    if i == -1:
+                        continue
+                    ts = line[i + 13:i + 13 + 24].split('"')[0]
+                    if first_ts is None:
+                        first_ts = ts
+                    last_ts = ts
+            if first_ts and last_ts:
+                t0 = datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
+                t1 = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+                session_min = max(0, int((t1 - t0).total_seconds() // 60))
+        except (OSError, ValueError):
+            pass
+
+    data = {"msgs": msgs, "in_tok": in_tok, "out_tok": out_tok,
+            "session_min": session_min, "project": project, "summary": summary}
+    _usage_cache["t"], _usage_cache["data"] = now, data
+    return data
+
+
+async def stats_pusher(ws: web.WebSocketResponse):
+    """Push usage stats to the plugin UI every 60s while it's connected."""
+    try:
+        while not ws.closed:
+            usage = await asyncio.to_thread(_claude_usage)
+            await ws.send_str(json.dumps({
+                "type": "stats",
+                "uptime_s": int(time.time() - START_TIME),
+                "execs": EXEC_COUNT,
+                "claude": usage,
+            }))
+            await asyncio.sleep(60)
+    except (ConnectionResetError, asyncio.CancelledError):
+        pass
 
 
 ERROR_HINTS = [
@@ -79,6 +182,7 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
 
     PLUGIN_WS = ws
     print(f"[plugin] connected from {request.remote}")
+    stats_task = asyncio.create_task(stats_pusher(ws))
 
     try:
         async for msg in ws:
@@ -114,6 +218,7 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                 if not entry["future"].done():
                     entry["future"].set_result(m)
     finally:
+        stats_task.cancel()
         if PLUGIN_WS is ws:
             PLUGIN_WS = None
         print("[plugin] disconnected")
@@ -142,6 +247,8 @@ async def exec_handler(request: web.Request) -> web.Response:
     if not isinstance(code, str) or not code.strip():
         return web.json_response({"ok": False, "error": "missing or empty 'code'"}, status=400)
 
+    global EXEC_COUNT
+    EXEC_COUNT += 1
     timeout = float(body.get("timeout", 60))
     rid = str(uuid.uuid4())
     fut: asyncio.Future = asyncio.get_event_loop().create_future()

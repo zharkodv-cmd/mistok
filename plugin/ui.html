@@ -51,10 +51,23 @@
   #log .ws { color: var(--muted); }
   #log div { min-height: 1em; }
 
+  #stats {
+    font-family: ui-monospace, monospace; font-size: 10px; color: var(--muted);
+    margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #stats b { color: var(--text); font-weight: 500; }
+  #stats .up { color: var(--ok); }
+  #summary {
+    font-size: 10px; color: #6b6b74; margin-bottom: 6px; font-style: italic;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #stats:empty, #summary:empty { display: none; }
+
   /* згорнутий режим — темна пігулка */
   body.mini { padding: 0; cursor: pointer; }
   body.mini .row { margin: 0; height: 36px; padding: 0 10px; gap: 6px; }
-  body.mini #log, body.mini #server, body.mini #status, body.mini #count { display: none; }
+  body.mini #log, body.mini #server, body.mini #status, body.mini #count,
+  body.mini #stats, body.mini #summary { display: none; }
   body.mini #brand { display: inline; color: var(--muted); }
 </style>
 </head>
@@ -67,6 +80,8 @@
     <span id="server">:8787</span>
     <button id="toggle" title="Згорнути / розгорнути">–</button>
   </div>
+  <div id="stats"></div>
+  <div id="summary"></div>
   <pre id="log"></pre>
 
 <script>
@@ -108,6 +123,29 @@ function shortId(id) {
   return id ? String(id).slice(0, 8) : "?";
 }
 
+// ── Claude usage stats (pushed by bridge every 60s) ─────────────────────
+function fmtTok(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return Math.round(n / 1e3) + "k";
+  return String(n);
+}
+function fmtMin(m) {
+  if (m == null) return null;
+  const h = Math.floor(m / 60);
+  return h ? h + "год " + (m % 60) + "хв" : m + "хв";
+}
+function renderStats(s) {
+  const c = s.claude || {};
+  const parts = [];
+  const dur = fmtMin(c.session_min);
+  if (dur) parts.push('<span class="up">⏱ ' + dur + "</span>");
+  if (c.project) parts.push("<b>" + c.project + "</b>");
+  parts.push("сьогодні: <b>" + (c.msgs || 0) + "</b> msg");
+  parts.push("↑" + fmtTok(c.in_tok || 0) + " ↓" + fmtTok(c.out_tok || 0));
+  document.getElementById("stats").innerHTML = parts.join(" · ");
+  document.getElementById("summary").textContent = c.summary || "";
+}
+
 function connect() {
   clearTimeout(reconnectTimer);
   setStatus("connecting…", "pending");
@@ -136,6 +174,8 @@ function connect() {
       countEl.textContent = execCount;
       log(`[exec] ${shortId(msg.id)} code=${(msg.code || "").length}b`);
       parent.postMessage({ pluginMessage: { type: "exec", id: msg.id, code: msg.code } }, "*");
+    } else if (msg.type === "stats") {
+      renderStats(msg);
     } else if (msg.type === "ping") {
       try { ws.send(JSON.stringify({ type: "pong" })); } catch (e) {}
     }
