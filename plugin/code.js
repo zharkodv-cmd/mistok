@@ -345,7 +345,7 @@ async function opSectionize(roots, res, params) {
     " (pad " + pad + ", gap " + gap + ")");
 }
 
-// плейсхолдери під картинки: за іменем або сірий прямокутник без дітей
+// слоти під картинки: порожні плейсхолдери за іменем АБО листові ноди, де фото вже стоїть
 const PH_RE = /^(ph|img|image|photo|picture|placeholder|rectangle)/i;
 // дефолтні імена шарів: "Frame 12", "frame13123132312", "Group", "union 3", …
 const DEFAULT_NAME_RE = /^(frame|group|rectangle|ellipse|polygon|star|line|arrow|vector|section|union|subtract|intersect|exclude)\s*\d*$/i;
@@ -354,9 +354,10 @@ function findImageSlots(roots) {
   for (const n of walkAll(roots)) {
     if (typeof n.width !== "number" || !("fills" in n)) continue;
     if (n.children && n.children.length) continue;
+    if (n.width < 40 || n.height < 40) continue;
     const hasImage = Array.isArray(n.fills) && n.fills.some((p) => p && p.type === "IMAGE");
-    if (hasImage) continue;
-    if (PH_RE.test(n.name) && n.width >= 40 && n.height >= 40) slots.push(n);
+    if (hasImage) { slots.push(n); continue; }        // існуюче фото = слот на заміну
+    if (PH_RE.test(n.name)) slots.push(n);            // порожній плейсхолдер за іменем
   }
   return slots;
 }
@@ -409,6 +410,7 @@ async function opImgReuse(roots, res) {
   const candidates = quality.length ? quality : pool;
   const used = new Set();
   for (const slot of findImageSlots(roots)) {
+    const ownHash = (Array.isArray(slot.fills) && (slot.fills.find((p) => p && p.type === "IMAGE") || {}).imageHash) || null;
     const ctx = contextTokens(slot);
     const ar = slot.width / slot.height;
     const ranked = candidates.map((e) => {
@@ -417,12 +419,14 @@ async function opImgReuse(roots, res) {
       for (const t of ctx) if (srcTok.has(t)) overlap++;
       return { e, overlap, arDiff: Math.abs(e.w / e.h - ar), area: e.w * e.h };
     }).sort((a, b) => b.overlap - a.overlap || a.arDiff - b.arDiff || b.area - a.area);
-    const best = (ranked.find((r) => !used.has(r.e.hash)) || ranked[0]).e;
+    const pick = ranked.find((r) => !used.has(r.e.hash) && r.e.hash !== ownHash) ||
+                 ranked.find((r) => r.e.hash !== ownHash) || ranked[0];
+    const best = pick.e;
     used.add(best.hash);
     slot.fills = [{ type: "IMAGE", imageHash: best.hash, scaleMode: "FILL" }];
     res.changes.push(slot.name + " ← " + best.from + " (" + Math.round(best.w) + "×" + Math.round(best.h) + ")");
   }
-  if (!res.changes.length) res.skipped.push("no placeholders found (names ph/img/photo/… with no children)");
+  if (!res.changes.length) res.skipped.push("no image slots found");
 }
 
 // ✨ запит на преміум-генерацію через Magnific — виконує Claude-сесія
@@ -445,7 +449,7 @@ async function opImgRequest(roots, res) {
     return { id: n.id, name: n.name, w: Math.round(n.width), h: Math.round(n.height),
              parent: parent ? parent.name : null, context: texts };
   });
-  if (!slots.length) throw new Error("no placeholders found (names ph/img/photo/… with no children)");
+  if (!slots.length) throw new Error("no image slots found (empty ph/img/photo/… placeholders or leaf nodes with an IMAGE fill)");
   res.request = {
     file: figma.root.name,
     frame: { id: roots[0].id, name: roots[0].name },
