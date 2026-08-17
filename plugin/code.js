@@ -1,5 +1,5 @@
-const UI_SIZE = { open: { w: 360, h: 260 }, mini: { w: 148, h: 40 } };
-figma.showUI(__html__, { width: UI_SIZE.open.w, height: UI_SIZE.open.h, title: "Figmosha Bridge" });
+const UI_SIZE = { open: { w: 320, h: 200 }, mini: { w: 126, h: 36 } };
+figma.showUI(__html__, { width: UI_SIZE.open.w, height: UI_SIZE.open.h, title: "Figmosha" });
 
 // відновити згорнутий стан з минулого запуску
 (async () => {

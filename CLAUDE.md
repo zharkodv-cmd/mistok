@@ -186,14 +186,16 @@ The error response includes a `hint` field for common cases — read it before d
 - Venv: `~/Code/figmosha2/venv/` (arm64, Python 3.12)
 - Log: `/tmp/figmosha-bridge.log`
 
-`tmux` на цій машині немає, тож `start-bridge.sh` не працює як є. Запуск:
+Bridge запускається **автоматично через launchd** — агент `~/Library/LaunchAgents/com.figmosha.bridge.plist` (RunAtLoad + KeepAlive: стартує при логіні, сам рестартиться після падіння). Вручну запускати нічого не треба.
 
 ```bash
-cd ~/Code/figmosha2 && nohup ./venv/bin/python bridge.py > /tmp/figmosha-bridge.log 2>&1 &
+curl -s http://localhost:8787/status                      # перевірка
+launchctl kickstart -k gui/$(id -u)/com.figmosha.bridge   # примусовий рестарт
+launchctl bootout gui/$(id -u)/com.figmosha.bridge        # зупинити зовсім
 ```
 
-`nohup` обов'язковий — інакше bridge помирає разом із сесією агента. Перевірка: `curl -s http://localhost:8787/status`.
+Плагін у Figma після рестарту bridge перепідключається сам (~2 с). Запуск плагіна: **⌘⌥P** (повторити останній плагін) — автозапуску dev-плагінів Figma не має.
 
 ## UI плагіна
 
-Вікно згортається в компактний бар (кнопка `–` у правому куті, клік по бару розгортає назад). Стан зберігається у `figma.clientStorage` під ключем `figmosha:mini` і переживає перезапуск. Розміри — у константі `UI_SIZE` в `code.js`.
+Темна тема, статус-дот, кольоровий лог, лічильник виконань. Вікно згортається в компактну пігулку (кнопка `–`, клік по пігулці розгортає). Стан зберігається у `figma.clientStorage` під ключем `figmosha:mini` і переживає перезапуск. Розміри — у константі `UI_SIZE` в `code.js` (open 320×200, mini 126×36). Тайтл-бар із хрестиком — хром Figma, його прибрати не можна.
