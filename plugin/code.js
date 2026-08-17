@@ -553,7 +553,8 @@ async function opRedesign(roots, res) {
     frame: { id: root.id, name: root.name, w: Math.round(root.width), h: Math.round(root.height) },
     spec,
     instruction: "awwwards SOTD/honorable mentions → find 2-3 sections similar in meaning → " +
-      "redraw this section in their spirit NEXT TO the original, with impeccable-skill craft applied on top. " +
+      "works for any selection: group, text block, section or a whole page frame. " +
+      "Redraw it in their spirit NEXT TO the original, with impeccable-skill craft applied on top. " +
       "If the source is a bitmap (screenshot/sketch — a frame with one IMAGE rectangle), take a mistok shot and read it visually first. " +
       "Spacing, scale and composition come from the REFERENCE (match its visual rhythm and generous whitespace by eye — " +
       "do NOT copy the source's paddings/gaps); only colors, type styles and assets come from our file (variables with scopes, text styles).",
@@ -740,28 +741,29 @@ async function opContrast(roots, res) {
   if (fails > 0) await placeReport(roots, res, "contrast");
 }
 
-// запит на повноцінний award-дизайн з прототипу — виконує Claude з impeccable skill
-async function opImpeccable(roots, res) {
+// ◆ pixel-perfect відтворення скріншота у Figma — виконує Claude-сесія
+async function opRecreate(roots, res) {
   const root = roots[0];
-  const spec = await HELPERS.spec(root, { maxDepth: 4 });
   res.design = {
     frame: { id: root.id, name: root.name, w: Math.round(root.width), h: Math.round(root.height) },
-    spec,
-    instruction: "load the impeccable skill first; from this prototype build a full award-grade page design " +
-      "NEXT TO the source using the file's variables (respect scopes), text styles and existing assets; " +
-      "brand register; commit to a bold direction, no AI slop; 1 polished variant + short design notes",
+    instruction: "PIXEL-PERFECT recreation of this screenshot as editable Figma layers. " +
+      "mistok shot the source at scale 1-2 and read it carefully; rebuild NEXT TO the source at 1:1 size: " +
+      "exact positions and sizes, colors sampled from the image (bind to file variables only on exact/near match), " +
+      "real TEXT nodes with matching font size/weight/line-height (project fonts or Inter), " +
+      "rectangles/fills/borders/radii/shadows as seen, image areas as IMAGE-fill placeholders cropped from the shot when possible. " +
+      "Verify with a side-by-side shot comparison and fix deltas before finishing.",
   };
-  res.changes.push("design request \"" + root.name + "\" → tell Claude: \"build the design\"");
+  res.changes.push("recreate request \"" + root.name + "\" → tell Claude: \"recreate the design\"");
 }
 
 const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor,
   textstyle: opTextStyles, sectionize: opSectionize, imgreuse: opImgReuse, imggen: opImgRequest,
   autolayout: opAutoLayout, grid: opGrid, spell: opSpell, redesign: opRedesign, prototype: opPrototype,
-  lint: opLint, contrast: opContrast, impeccable: opImpeccable };
+  lint: opLint, contrast: opContrast, recreate: opRecreate };
 const OP_NAMES = { clean: "Clean", rename: "Rename", varsal: "AL→vars", varscolor: "Colors→vars",
   textstyle: "Text styles", sectionize: "Sectionize", imgreuse: "Img reuse", imggen: "Magnific request",
   autolayout: "Auto-layout", grid: "Grid snap", spell: "Spellcheck", redesign: "Redesign",
-  prototype: "Prototype", lint: "Lint", contrast: "Contrast", impeccable: "Design" };
+  prototype: "Prototype", lint: "Lint", contrast: "Contrast", recreate: "Recreate" };
 
 function safeStringify(value) {
   if (value === undefined) return null;

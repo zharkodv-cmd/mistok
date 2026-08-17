@@ -575,7 +575,7 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                         json.dump(req, f, ensure_ascii=False, indent=1)
                     print(f"[design] request: {req.get('frame', {}).get('name')} → /tmp/mistok-design-request.json", flush=True)
                     await send_plugin({"type": "chatreply",
-                        "text": "◆ Design request for \"" + str(req.get('frame', {}).get('name')) + "\" is ready.\nTell Claude in a session: build the design"})
+                        "text": "◆ Recreate request for \"" + str(req.get('frame', {}).get('name')) + "\" is ready.\nTell Claude in a session: recreate the design"})
                 except OSError as e:
                     print(f"[design] failed: {e}", flush=True)
                 continue
