@@ -598,12 +598,25 @@ async function opSpell(roots, res) {
   res.changes.push("на вичитку: " + texts.length + " текстів → Claude працює у фоні");
 }
 
+// запит на редизайн секції за референсами awwwards — виконує Claude-сесія
+async function opRedesign(roots, res) {
+  const root = roots[0];
+  const spec = await HELPERS.spec(root, { maxDepth: 3 });
+  res.redesign = {
+    frame: { id: root.id, name: root.name, w: Math.round(root.width), h: Math.round(root.height) },
+    spec,
+    instruction: "awwwards SOTD/honorable mentions → знайти 2-3 схожі за сенсом секції → " +
+      "перемалювати цю секцію у їхньому дусі нашими variables/text styles/асетами, варіанти поруч",
+  };
+  res.changes.push("запит на редизайн «" + root.name + "» → скажи Claude: «редизайнь секцію»");
+}
+
 const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor,
   textstyle: opTextStyles, sectionize: opSectionize, imgreuse: opImgReuse, imggen: opImgRequest,
-  autolayout: opAutoLayout, grid: opGrid, spell: opSpell };
+  autolayout: opAutoLayout, grid: opGrid, spell: opSpell, redesign: opRedesign };
 const OP_NAMES = { clean: "Clean", rename: "Rename", varsal: "AL→vars", varscolor: "Colors→vars",
   textstyle: "Text styles", sectionize: "Sectionize", imgreuse: "Img reuse", imggen: "Magnific request",
-  autolayout: "Auto-layout", grid: "Grid snap", spell: "Spellcheck" };
+  autolayout: "Auto-layout", grid: "Grid snap", spell: "Spellcheck", redesign: "Redesign" };
 
 function safeStringify(value) {
   if (value === undefined) return null;
@@ -894,9 +907,12 @@ figma.ui.onmessage = async (msg) => {
       });
       if (res.request) figma.ui.postMessage({ type: "imgrequest", request: res.request });
       if (res.spell) figma.ui.postMessage({ type: "spellrequest", texts: res.spell.texts });
+      if (res.redesign) figma.ui.postMessage({ type: "redesignrequest", request: res.redesign });
       figma.commitUndo(); // кожна операція = окремий крок undo
     } catch (e) {
       figma.notify("Помилка " + OP_NAMES[msg.kind] + ": " + ((e && e.message) || e));
+      figma.ui.postMessage({ type: "opreport", kind: msg.kind, error: true,
+        summary: "помилка: " + ((e && e.message) || e), changes: [], skipped: [] });
     }
     return;
   }

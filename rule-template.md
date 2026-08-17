@@ -24,14 +24,14 @@
 
 ## Images: Magnific MCP
 
-When the user asks to fill frames/sections with images — generate via the **Magnific MCP** tools, never stock-style placeholders.
+When the user asks to fill frames/sections with images — search & download READY premium stock photos via the **Magnific MCP** tools (do NOT AI-generate unless explicitly asked).
 
 - Read the project's art direction first (`projects/<name>.md` in ~/Code/mistok, project brief, color tokens). The prompt must match it.
 - Write specific prompts: subject, composition, lighting, palette (hex from tokens), photography/render style. Never generic "beautiful modern image".
-- Forbidden in results: text/watermarks, oversaturated HDR look, generic-stock feel, anatomy artifacts. If the result reads as AI slop — refine the prompt and regenerate; do not insert it.
+- Forbidden in results: text/watermarks, oversaturated HDR look, generic-stock feel, anatomy artifacts. If a result looks like AI slop or a generic stock cliché — pick another photo; do not insert it.
 - Match resolution/aspect to the target node (size known from `spec`). Insert: bytes → `figma.createImage(bytes)` → IMAGE fill, `scaleMode: 'FILL'`.
 - For hero/key placements generate 2–3 variants and show the user before mass-filling.
-- **Plugin ✨ button** writes a request to `/tmp/mistok-image-request.json` (frame, slots with ids/sizes/nearby texts). When the user says «встав картинки» — read it, generate per the quality bar above, insert each via `mistok img <slotId> file.png`, then delete the request file.
+- **Plugin ✨ button** writes a request to `/tmp/mistok-image-request.json` (frame, slots with ids/sizes/nearby texts). When the user says «встав картинки» — read it, find & download matching premium photos per the quality bar above, insert each via `mistok img <slotId> file.png`, then delete the request file.
 
 ## Cautions
 
@@ -43,3 +43,7 @@ When the user asks to fill frames/sections with images — generate via the **Ma
 ## Project-specific
 
 <!-- node IDs, page conventions, token quirks of THIS project go here -->
+
+## Section redesign (plugin ⟳ button)
+
+The button writes `/tmp/mistok-redesign-request.json` (section spec + instruction). When the user says «редизайнь секцію»: read it; browse awwwards.com Sites of the Day / Honorable Mentions via Playwright; pick 2–3 sections similar in meaning and capture reference screenshots; redraw the section NEXT TO the original using the file's variables (respect scopes), text styles and existing assets, 1–2 variants; references are inspiration, not a copy; delete the request file when done.
