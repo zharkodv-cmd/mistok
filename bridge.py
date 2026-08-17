@@ -624,8 +624,7 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                     with open("/tmp/mistok-redesign-request.json", "w", encoding="utf-8") as f:
                         json.dump(req, f, ensure_ascii=False, indent=1)
                     print(f"[redesign] request: {req.get('frame', {}).get('name')} → /tmp/mistok-redesign-request.json", flush=True)
-                    await ws.send_str(json.dumps({"type": "chatreply",
-                        "text": "⟳ Redesign request for \"" + str(req.get('frame', {}).get('name')) + "\" is ready.\nTell Claude in a session: redesign the section"}))
+                    asyncio.create_task(run_protocol("redesign the section", "⟳ redesigning"))
                 except OSError as e:
                     print(f"[redesign] failed: {e}", flush=True)
                 continue
