@@ -422,6 +422,16 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
             if mtype == "spellrequest":
                 asyncio.create_task(run_spell(ws, m.get("texts") or []))
                 continue
+            if mtype == "protorequest":
+                try:
+                    req = m.get("request") or {}
+                    req["ts"] = datetime.now().astimezone().isoformat(timespec="seconds")
+                    with open("/tmp/mistok-prototype-request.json", "w", encoding="utf-8") as f:
+                        json.dump(req, f, ensure_ascii=False, indent=1)
+                    print(f"[proto] request: {req.get('frame', {}).get('name')} → /tmp/mistok-prototype-request.json", flush=True)
+                except OSError as e:
+                    print(f"[proto] failed: {e}", flush=True)
+                continue
             if mtype == "redesignrequest":
                 try:
                     req = m.get("request") or {}

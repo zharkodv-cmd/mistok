@@ -220,8 +220,9 @@ async function opRename(roots, res) {
     if (n.type === "GROUP" && DEFAULT_RE.test(n.name)) groups.push(n);
   }
   for (const g of groups.reverse()) {
-    try { figma.ungroup(g); res.changes.push("розгруповано " + g.name); }
-    catch (e) { res.skipped.push(g.name + " (ungroup)"); }
+    const nm = g.name; // після ungroup нода мертва — читати name не можна
+    try { figma.ungroup(g); res.changes.push("розгруповано " + nm); }
+    catch (e) { res.skipped.push(nm + " (ungroup)"); }
   }
   // item: ≥3 дефолтних сусідів одного розміру = повторюваний елемент
   const itemNamed = new Set();
@@ -611,12 +612,27 @@ async function opRedesign(roots, res) {
   res.changes.push("запит на редизайн «" + root.name + "» → скажи Claude: «редизайнь секцію»");
 }
 
+// запит на прототип із вайрфрейму/скетчу/текстів — виконує Claude-сесія
+async function opPrototype(roots, res) {
+  const root = roots[0];
+  const spec = await HELPERS.spec(root, { maxDepth: 4 });
+  res.prototype = {
+    frame: { id: root.id, name: root.name, w: Math.round(root.width), h: Math.round(root.height) },
+    spec,
+    instruction: "зібрати сучасний мінімалістичний прототип: Inter, чорно-біло-сірий, повний auto-layout, " +
+      "всі тексти і логіка джерела; якщо джерело — бітмап, зняти shot і прочитати візуально; " +
+      "будувати поруч із джерелом",
+  };
+  res.changes.push("запит на прототип «" + root.name + "» → скажи Claude: «зроби прототип»");
+}
+
 const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor,
   textstyle: opTextStyles, sectionize: opSectionize, imgreuse: opImgReuse, imggen: opImgRequest,
-  autolayout: opAutoLayout, grid: opGrid, spell: opSpell, redesign: opRedesign };
+  autolayout: opAutoLayout, grid: opGrid, spell: opSpell, redesign: opRedesign, prototype: opPrototype };
 const OP_NAMES = { clean: "Clean", rename: "Rename", varsal: "AL→vars", varscolor: "Colors→vars",
   textstyle: "Text styles", sectionize: "Sectionize", imgreuse: "Img reuse", imggen: "Magnific request",
-  autolayout: "Auto-layout", grid: "Grid snap", spell: "Spellcheck", redesign: "Redesign" };
+  autolayout: "Auto-layout", grid: "Grid snap", spell: "Spellcheck", redesign: "Redesign",
+  prototype: "Prototype" };
 
 function safeStringify(value) {
   if (value === undefined) return null;
@@ -908,6 +924,7 @@ figma.ui.onmessage = async (msg) => {
       if (res.request) figma.ui.postMessage({ type: "imgrequest", request: res.request });
       if (res.spell) figma.ui.postMessage({ type: "spellrequest", texts: res.spell.texts });
       if (res.redesign) figma.ui.postMessage({ type: "redesignrequest", request: res.redesign });
+      if (res.prototype) figma.ui.postMessage({ type: "protorequest", request: res.prototype });
       figma.commitUndo(); // кожна операція = окремий крок undo
     } catch (e) {
       figma.notify("Помилка " + OP_NAMES[msg.kind] + ": " + ((e && e.message) || e));

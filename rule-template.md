@@ -47,3 +47,7 @@ When the user asks to fill frames/sections with images — search & download REA
 ## Section redesign (plugin ⟳ button)
 
 The button writes `/tmp/mistok-redesign-request.json` (section spec + instruction). When the user says «редизайнь секцію»: read it; browse awwwards.com Sites of the Day / Honorable Mentions via Playwright; pick 2–3 sections similar in meaning and capture reference screenshots; redraw the section NEXT TO the original using the file's variables (respect scopes), text styles and existing assets, 1–2 variants; references are inspiration, not a copy; delete the request file when done.
+
+## Прототип (кнопка ▭ у плагіні)
+
+Кнопка пише запит у `/tmp/mistok-prototype-request.json` (spec джерела + інструкція). Коли користувач каже «зроби прототип»: прочитай запит; якщо джерело — бітмап (фрейм з одним IMAGE-прямокутником) — `mistok shot` і прочитай візуально; збери поруч із джерелом сучасний мінімалістичний прототип: Inter (Regular/Medium/Semi Bold — саме «Semi Bold» з пробілом), чорно-біло-сірий (#111/#6B6B6B/#F0F0F0/#E5E5E5), повний auto-layout, ВСІ тексти і логіка джерела. Після виконання видали файл запиту.
