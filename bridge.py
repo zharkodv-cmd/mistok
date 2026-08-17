@@ -170,6 +170,7 @@ def _claude_usage():
 
 
 CHAT_BUSY = False
+RUNNING: dict = {}  # kind -> subprocess (для kill)
 
 async def send_plugin(payload: dict):
     """Надіслати в АКТУАЛЬНЕ з'єднання плагіна (плагін міг перепідключитись)."""
@@ -182,7 +183,7 @@ async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effo
     """Headless Claude Code turn triggered from the plugin's chat input."""
     global CHAT_BUSY
     if CHAT_BUSY:
-        await send_plugin({"type": "chatreply", "text": "⏳ previous request still running"})
+        await send_plugin({"type": "chatreply", "task": "chat", "text": "⏳ previous request still running"})
         return
     CHAT_BUSY = True
     try:
@@ -191,7 +192,7 @@ async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effo
         env["PATH"] = env.get("PATH", "") + f":{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin"
         claude = shutil.which("claude", path=env["PATH"])
         if not claude:
-            await send_plugin({"type": "chatreply", "text": "claude CLI not found in PATH"})
+            await send_plugin({"type": "chatreply", "task": "chat", "text": "claude CLI not found in PATH"})
             return
         opts = []
         if model:
@@ -199,7 +200,7 @@ async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effo
         if effort:
             opts += ["--effort", effort]
         label = " · ".join(filter(None, [model, effort]))
-        await send_plugin({"type": "chatstatus",
+        await send_plugin({"type": "chatstatus", "task": "chat",
                                       "text": "thinking…" + (f" ({label})" if label else "")})
         cwd = str(Path.home() / "Code" / "mistok")
 
@@ -210,11 +211,13 @@ async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effo
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
+            RUNNING["chat"] = proc
             try:
                 out, err = await asyncio.wait_for(proc.communicate(), timeout=300)
             except asyncio.TimeoutError:
                 proc.kill()
                 return None, "timeout 300s"
+            RUNNING.pop("chat", None)
             return (out.decode("utf-8", "replace").strip() or None,
                     err.decode("utf-8", "replace").strip())
 
@@ -222,44 +225,41 @@ async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effo
         if out is None and err != "timeout 300s":
             out, err = await attempt([])  # перша розмова в цьому cwd — без --continue
         reply = out or f"(empty reply{': ' + err[:300] if err else ''})"
-        await send_plugin({"type": "chatreply", "text": reply[:6000]})
+        await send_plugin({"type": "chatreply", "task": "chat", "text": reply[:6000]})
         print(f"[chat] {len(text)}b → {len(reply)}b", flush=True)
     except Exception as e:
         try:
-            await send_plugin({"type": "chatreply", "text": f"error: {e}"})
+            await send_plugin({"type": "chatreply", "task": "chat", "text": f"error: {e}"})
         except Exception:
             pass
     finally:
         CHAT_BUSY = False
-
-async def send_plugin(payload: dict):
-    """Надіслати в АКТУАЛЬНЕ з'єднання плагіна (плагін міг перепідключитись)."""
-    ws = PLUGIN_WS
-    if ws is not None and not ws.closed:
-        await ws.send_str(json.dumps(payload))
-
+RUNNING: dict = {}  # kind -> subprocess (для kill)
 
 async def run_import(ws: web.WebSocketResponse, url: str):
     """Веб-сторінка → редаговані шари Figma (webimport.py, Playwright)."""
     try:
         home = Path.home() / "Code" / "mistok"
         py = str(home / "venv" / "bin" / "python")
-        await send_plugin({"type": "chatstatus", "text": "importing " + url + " …"})
+        await send_plugin({"type": "chatstatus", "task": "import", "text": "importing " + url + " …"})
         proc = await asyncio.create_subprocess_exec(
             py, str(home / "webimport.py"), url, cwd=str(home),
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
+        RUNNING["import"] = proc
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=180)
         except asyncio.TimeoutError:
             proc.kill()
-            await send_plugin({"type": "chatreply", "text": "import: timeout 180s"})
+            RUNNING.pop("import", None)
+            await send_plugin({"type": "chatreply", "task": "import", "text": "import: timeout 180s"})
             return
+        RUNNING.pop("import", None)
         tail = (out.decode("utf-8", "replace").strip().splitlines() or ["(empty)"])[-1]
         if proc.returncode != 0:
             tail += " | " + err.decode("utf-8", "replace").strip()[-300:]
-        await send_plugin({"type": "chatreply", "text": tail[:1500]})
+        await send_plugin({"type": "chatreply", "task": "import", "text": tail[:1500]})
         print(f"[import] {url} → rc={proc.returncode}", flush=True)
     except Exception as e:
         print(f"[import] failed: {e}", flush=True)
@@ -290,13 +290,15 @@ async def run_spell(ws: web.WebSocketResponse, texts: list):
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
+        RUNNING["spell"] = proc
         try:
             out, _err = await asyncio.wait_for(proc.communicate(), timeout=240)
         except asyncio.TimeoutError:
             proc.kill()
             print("[spell] TIMEOUT 240s", flush=True)
-            await send_plugin({"type": "chatreply", "text": "Spellcheck: timeout"})
+            await send_plugin({"type": "chatreply", "task": "spell", "text": "Spellcheck: timeout"})
             return
+        RUNNING.pop("spell", None)
         raw = out.decode("utf-8", "replace")
         print(f"[spell] claude done, {len(raw)}b out", flush=True)
         start, end = raw.find("["), raw.rfind("]")
@@ -308,7 +310,7 @@ async def run_spell(ws: web.WebSocketResponse, texts: list):
             except json.JSONDecodeError:
                 pass
         if not fixes:
-            await send_plugin({"type": "chatreply", "text": "Spellcheck: no errors found ✓"})
+            await send_plugin({"type": "chatreply", "task": "spell", "text": "Spellcheck: no errors found ✓"})
             print("[spell] no fixes", flush=True)
             return
         code = (
@@ -355,7 +357,7 @@ async def run_alplan(request: dict):
         env["PATH"] = env.get("PATH", "") + f":{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin"
         claude = shutil.which("claude", path=env["PATH"])
         if not claude:
-            await send_plugin({"type": "chatreply", "text": "auto-layout: claude CLI not found"})
+            await send_plugin({"type": "chatreply", "task": "autolayout", "text": "auto-layout: claude CLI not found"})
             return
         prompt = (
             "You are a senior product designer preparing Figma frames for auto-layout. "
@@ -376,11 +378,12 @@ async def run_alplan(request: dict):
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
+        RUNNING["spell"] = proc
         try:
             out, _err = await asyncio.wait_for(proc.communicate(), timeout=240)
         except asyncio.TimeoutError:
             proc.kill()
-            await send_plugin({"type": "chatreply", "text": "auto-layout: timeout"})
+            await send_plugin({"type": "chatreply", "task": "autolayout", "text": "auto-layout: timeout"})
             return
         raw = out.decode("utf-8", "replace")
         start, end = raw.find("{"), raw.rfind("}")
@@ -391,7 +394,7 @@ async def run_alplan(request: dict):
             except json.JSONDecodeError:
                 plan = None
         if not plan or not plan.get("frames"):
-            await send_plugin({"type": "chatreply", "text": "auto-layout: could not parse the plan"})
+            await send_plugin({"type": "chatreply", "task": "autolayout", "text": "auto-layout: could not parse the plan"})
             print(f"[alplan] parse fail: {raw[:200]}", flush=True)
             return
         code = (
@@ -442,7 +445,7 @@ async def run_alplan(request: dict):
         resp = await asyncio.to_thread(
             urllib_request_json, "http://127.0.0.1:8787/exec", {"code": code, "timeout": 90})
         groups = ((resp.get("value") or {}).get("groups")) or []
-        await send_plugin({"type": "chatreply",
+        await send_plugin({"type": "chatreply", "task": "autolayout",
                           "text": "Smart auto-layout applied: " + (", ".join(groups) if groups else "structure set")})
         print(f"[alplan] applied: {groups}", flush=True)
     except Exception as e:
@@ -450,8 +453,8 @@ async def run_alplan(request: dict):
 
 
 
-async def run_protocol(phrase: str, label: str, timeout_s: int = 900, model: str = None, effort: str = None):
-    """Одразу виконати протокол headless-сесією (cwd=mistok → CLAUDE.md з протоколами)."""
+async def run_protocol(phrase: str, label: str, timeout_s: int = 900, model: str = None, effort: str = None, kind: str = "proto"):
+    """Виконати протокол headless-сесією зі стрім-прогресом у панель."""
     print(f"[proto-run] start: {label}", flush=True)
     try:
         import shutil
@@ -459,33 +462,96 @@ async def run_protocol(phrase: str, label: str, timeout_s: int = 900, model: str
         env["PATH"] = env.get("PATH", "") + f":{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin"
         claude = shutil.which("claude", path=env["PATH"])
         if not claude:
-            await send_plugin({"type": "chatreply", "text": label + ": claude CLI not found"})
+            await send_plugin({"type": "chatreply", "task": kind, "text": label + ": claude CLI not found"})
             return
-        await send_plugin({"type": "chatstatus", "text": label + " (headless, up to ~15 min)…"})
+        await send_plugin({"type": "chatstatus", "task": kind, "text": label + "…"})
+        opts = ["--model", model or "opus"]
+        if effort:
+            opts += ["--effort", effort]
         proc = await asyncio.create_subprocess_exec(
-            claude, "-p", phrase,
-            "--model", model or "opus",
-            *(["--effort", effort] if effort else []),
+            claude, "-p", phrase, *opts,
+            "--output-format", "stream-json", "--verbose",
             "--dangerously-skip-permissions",
             cwd=str(Path.home() / "Code" / "mistok" / "headless"), env=env,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
+        RUNNING[kind] = proc
+        deadline = time.time() + timeout_s
+        final_text = None
+        last_status = 0.0
         try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await send_plugin({"type": "chatreply", "text": label + ": timeout"})
+            while True:
+                remain = deadline - time.time()
+                if remain <= 0:
+                    proc.kill()
+                    await send_plugin({"type": "chatreply", "task": kind, "text": label + ": timeout"})
+                    return
+                try:
+                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=min(remain, 30))
+                except asyncio.TimeoutError:
+                    continue
+                if not line:
+                    break
+                try:
+                    evt = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                et = evt.get("type")
+                if et == "assistant":
+                    for блок in ((evt.get("message") or {}).get("content") or []):
+                        if блок.get("type") == "tool_use" and time.time() - last_status > 2:
+                            last_status = time.time()
+                            tn = блок.get("name", "")
+                            ti = блок.get("input") or {}
+                            hintt = ti.get("command") or ti.get("file_path") or ""
+                            await send_plugin({"type": "chatstatus", "task": kind,
+                                               "text": label + ": " + tn + (" · " + str(hintt)[:48] if hintt else "")})
+                elif et == "result":
+                    final_text = evt.get("result") or ""
+        finally:
+            RUNNING.pop(kind, None)
+        if proc.returncode is None:
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                proc.kill()
+        if final_text is None:
+            err = (await proc.stderr.read()).decode("utf-8", "replace")[-300:]
+            await send_plugin({"type": "chatreply", "task": kind, "text": label + ": no result | " + err})
+            print(f"[proto-run] no result: {label}", flush=True)
             return
-        text = out.decode("utf-8", "replace").strip()
-        report = text if text else "(empty)"
-        if proc.returncode != 0:
-            report += " | " + err.decode("utf-8", "replace").strip()[-200:]
-        await send_plugin({"type": "chatreply", "text": report[:400]})
+        report = final_text.strip()[:400]
+        # [node:ID] у звіті → прев'ю результату
+        import re as _re
+        m = _re.search(r"\[node:([0-9]+:[0-9]+)\]", final_text)
+        img_uri = None
+        if m:
+            nid = m.group(1)
+            code = (
+                f"const n = await figma.getNodeByIdAsync('{nid}');"
+                "if (!n) return null;"
+                "const scale = Math.min(1, 640 / Math.max(n.width, 1));"
+                "const bytes = await n.exportAsync({format: 'PNG', constraint: {type: 'SCALE', value: scale}});"
+                "return figma.base64Encode(bytes);"
+            )
+            try:
+                resp = await asyncio.to_thread(
+                    urllib_request_json, "http://127.0.0.1:8787/exec", {"code": code, "timeout": 60})
+                b64 = resp.get("value")
+                if resp.get("ok") and isinstance(b64, str) and len(b64) < 3_500_000:
+                    img_uri = "data:image/png;base64," + b64
+            except Exception:
+                pass
+            report = _re.sub(r"\s*\[node:[0-9]+:[0-9]+\]", "", report).strip()
+        payload = {"type": "chatreply", "task": kind, "text": report}
+        if img_uri:
+            payload["img"] = img_uri
+        await send_plugin(payload)
         print(f"[proto-run] done: {label} rc={proc.returncode}", flush=True)
     except Exception as e:
+        RUNNING.pop(kind, None)
         print(f"[proto-run] failed: {e}", flush=True)
-
 
 async def stats_pusher(ws: web.WebSocketResponse):
     """Push usage stats to the plugin UI every 60s while it's connected."""
@@ -583,6 +649,21 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                 continue
             if mtype == "pong":
                 continue
+            if mtype == "kill":
+                killed = []
+                for k, pr in list(RUNNING.items()):
+                    try:
+                        pr.kill()
+                        killed.append(k)
+                    except Exception:
+                        pass
+                    RUNNING.pop(k, None)
+                for k in killed:
+                    await send_plugin({"type": "chatreply", "task": k, "text": "✕ cancelled: " + k})
+                if not killed:
+                    await send_plugin({"type": "chatreply", "task": "chat", "text": "nothing to cancel"})
+                print(f"[kill] {killed}", flush=True)
+                continue
             if mtype == "chat":
                 text = (m.get("text") or "").strip()
                 if text.startswith(("http://", "https://")) and " " not in text:
@@ -612,7 +693,7 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                     with open("/tmp/mistok-design-request.json", "w", encoding="utf-8") as f:
                         json.dump(req, f, ensure_ascii=False, indent=1)
                     print(f"[design] request: {req.get('frame', {}).get('name')} → /tmp/mistok-design-request.json", flush=True)
-                    asyncio.create_task(run_protocol("recreate the design", "◆ recreating", model=req.get("model"), effort=req.get("effort")))
+                    asyncio.create_task(run_protocol("recreate the design", "◆ recreating", model=req.get("model"), effort=req.get("effort"), kind="recreate"))
                 except OSError as e:
                     print(f"[design] failed: {e}", flush=True)
                 continue
@@ -626,7 +707,7 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                     with open("/tmp/mistok-redesign-request.json", "w", encoding="utf-8") as f:
                         json.dump(req, f, ensure_ascii=False, indent=1)
                     print(f"[redesign] request: {req.get('frame', {}).get('name')} → /tmp/mistok-redesign-request.json", flush=True)
-                    asyncio.create_task(run_protocol("redesign the section", "⟳ redesigning", model=req.get("model"), effort=req.get("effort")))
+                    asyncio.create_task(run_protocol("redesign the section", "⟳ redesigning", model=req.get("model"), effort=req.get("effort"), kind="redesign"))
                 except OSError as e:
                     print(f"[redesign] failed: {e}", flush=True)
                 continue

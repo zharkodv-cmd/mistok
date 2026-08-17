@@ -44,4 +44,4 @@ Modern minimalist prototype: Inter (Regular/Medium/"Semi Bold"), black/white/gra
 - Self-check round: shot the result, walk this list, fix what fails — then finish.
 
 ## Finish
-Delete the request file. Reply with ONE line: what was built, frame name, key counts. No process narration.
+Delete the request file. Reply with ONE line: what was built, frame name, key counts, and END the line with the result frame id in the exact form [node:<id>] (e.g. [node:123:456]). No process narration.

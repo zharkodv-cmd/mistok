@@ -37,14 +37,16 @@
   }
   button { transition: background .15s; }
   button:active { transform: translateY(1px); }
-  #toggle, #undoBtn {
+  #killBtn { display: none; color: var(--err); }
+  #killBtn.on { display: grid; }
+  #toggle, #undoBtn, #killBtn {
     border: 1px solid var(--border); background: transparent; border-radius: 5px;
     width: 22px; height: 22px; cursor: pointer; color: var(--muted);
     font-size: 14px; padding: 0; flex: none;
     display: grid; place-items: center;
   }
-  #toggle:hover, #undoBtn:hover { background: var(--panel); color: var(--text); }
-  body.mini #undoBtn { display: none; }
+  #toggle:hover, #undoBtn:hover, #killBtn:hover { background: var(--panel); color: var(--text); }
+  body.mini #undoBtn, body.mini #killBtn { display: none !important; }
 
   #summary {
     font-size: 10px; color: var(--dim); font-style: italic; flex: none;
@@ -140,6 +142,7 @@
     border-bottom-left-radius: 3px;
   }
   .msg.bot.thinking { color: var(--muted); font-style: italic; }
+  .msg img { display: block; max-width: 100%; border-radius: 6px; margin-top: 6px; border: 1px solid var(--border); }
   #chatRow { flex: none; display: flex; gap: 5px; }
   #chatIn {
     flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border);
@@ -188,6 +191,7 @@
     <span id="brand">Mistok</span>
     <span id="status" title="ws://localhost:8787/plugin">connecting…</span>
     <span id="count" title="execs this bridge session">0</span>
+    <button id="killBtn" data-tip="Cancel" title="Cancel running background task">✕</button>
     <button id="undoBtn" data-tip="Undo" title="Undo last action (triggerUndo)"></button>
     <button id="toggle" title="Collapse / expand">–</button>
   </div>
@@ -271,9 +275,28 @@ function renderTasks() {
   }
   fitHeight();
 }
-function startTask(key, label) { activeTasks.set(key, label); renderTasks(); }
+function setBtnBusy(kind, on) {
+  const btn = document.querySelector('#ops button[data-kind="' + kind + '"]');
+  if (btn) { btn.disabled = on; btn.style.opacity = on ? ".35" : ""; btn.style.pointerEvents = on ? "none" : ""; }
+}
+function taskKind(key) { return key.startsWith("op:") || key.startsWith("bg:") ? key.slice(3) : null; }
+function refreshKill() {
+  const hasBg = [...activeTasks.keys()].some((k) => k.startsWith("bg:") || k === "chat");
+  document.getElementById("killBtn").classList.toggle("on", hasBg);
+}
+function startTask(key, label) {
+  activeTasks.set(key, label);
+  const k = taskKind(key); if (k) setBtnBusy(k, true);
+  refreshKill(); renderTasks();
+}
 function updateTask(key, label) { if (activeTasks.has(key)) { activeTasks.set(key, label); renderTasks(); } }
-function endTask(key) { if (activeTasks.delete(key)) renderTasks(); }
+function endTask(key) {
+  if (activeTasks.delete(key)) {
+    const k = taskKind(key);
+    if (k && ![...activeTasks.keys()].some((x) => taskKind(x) === k)) setBtnBusy(k, false);
+    refreshKill(); renderTasks();
+  }
+}
 // сумісність зі старими викликами busy(±1) для чат-потоку
 function busy() {}
 
@@ -355,14 +378,14 @@ function connect() {
     } else if (msg.type === "stats") {
       renderStats(msg);
     } else if (msg.type === "chatstatus") {
-      updateTask("chat", msg.text);
+      const key = msg.task && msg.task !== "chat" ? "bg:" + msg.task : "chat";
+      if (activeTasks.has(key)) updateTask(key, msg.text);
+      else startTask(key, msg.text);
       chatShow(msg.text, true);
     } else if (msg.type === "chatreply") {
-      endTask("chat");
-      endTask("bg:spell");
-      endTask("bg:al");
-      endTask("bg:proto");
-      chatShow(msg.text, false);
+      if (msg.task && msg.task !== "chat") endTask("bg:" + msg.task);
+      else endTask("chat");
+      chatShow(msg.text, false, msg.img || null);
     } else if (msg.type === "ping") {
       try { ws.send(JSON.stringify({ type: "pong" })); } catch (e) {}
     }
@@ -386,6 +409,10 @@ const undoBtn = document.getElementById("undoBtn");
 undoBtn.innerHTML = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
   'stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">' +
   '<path d="M6.5 3.5L3 7l3.5 3.5"/><path d="M3 7h6.5a3.5 3.5 0 013.5 3.5v2"/></svg>';
+document.getElementById("killBtn").onclick = (e) => {
+  e.stopPropagation();
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "kill" }));
+};
 undoBtn.onclick = (e) => {
   e.stopPropagation();
   parent.postMessage({ pluginMessage: { type: "undo" } }, "*");
@@ -406,19 +433,26 @@ function addMsg(role, text, thinking) {
   fitHeight();
   return d;
 }
-function chatShow(text, thinking) {
+function chatShow(text, thinking, img) {
   if (thinking) {
     if (pendingMsg) { pendingMsg.textContent = text; }
     else pendingMsg = addMsg("bot", text, true);
-    chatOut.scrollTop = chatOut.scrollHeight;
   } else {
+    let el;
     if (pendingMsg) {
       pendingMsg.classList.remove("thinking");
       pendingMsg.textContent = text;
+      el = pendingMsg;
       pendingMsg = null;
-    } else addMsg("bot", text);
-    chatOut.scrollTop = chatOut.scrollHeight;
+    } else el = addMsg("bot", text);
+    if (img) {
+      const im = document.createElement("img");
+      im.src = img;
+      el.appendChild(im);
+      im.onload = () => { chatOut.scrollTop = chatOut.scrollHeight; fitHeight(); };
+    }
   }
+  chatOut.scrollTop = chatOut.scrollHeight;
   fitHeight();
 }
 const mSel = document.getElementById("mSel");
@@ -634,11 +668,9 @@ window.onmessage = (e) => {
   else if (m.type === "opreport") {
     endTask("op:" + m.kind);
     // фонова вичитка триває після opreport — тримаємо лоадер до chatreply
-    if (m.kind === "spell" && !m.error) startTask("bg:spell", "spellchecking (Claude)…");
-    if (m.kind === "autolayout" && !m.error) startTask("bg:al", "auto-layout planning (Claude)…");
-    if (m.kind === "recreate" && !m.error) startTask("bg:proto", "recreating design (Claude)…");
-    if (m.kind === "redesign" && !m.error) startTask("bg:proto", "redesigning (Claude)…");
-    if (m.kind === "prototype" && !m.error) startTask("bg:proto", "building prototype (Claude)…");
+    const BG_LABELS = { spell: "spellchecking (Claude)…", autolayout: "auto-layout planning (Claude)…",
+      recreate: "recreating design (Claude)…", redesign: "redesigning (Claude)…", prototype: "building prototype (Claude)…" };
+    if (BG_LABELS[m.kind] && !m.error) startTask("bg:" + m.kind, BG_LABELS[m.kind]);
   }
   else if (m.type === "log") {/* skip — would spam */}
 };
