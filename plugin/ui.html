@@ -114,13 +114,25 @@
   .lim .fill.hot { background: var(--err); }
 
   #chatOut {
-    display: none; background: var(--panel); border: 1px solid var(--border);
-    border-radius: 6px; padding: 6px 8px; font-size: 10.5px; line-height: 1.5;
-    max-height: 180px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
-    color: var(--text); flex: none;
+    display: none; flex: none; flex-direction: column; gap: 6px;
+    max-height: 240px; overflow-y: auto; padding: 2px;
   }
-  #chatOut.open { display: block; }
-  #chatOut.thinking { color: var(--muted); font-style: italic; }
+  #chatOut.open { display: flex; }
+  .msg {
+    max-width: 86%; padding: 6px 9px; border-radius: 9px;
+    font-size: 10.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  }
+  .msg.user {
+    align-self: flex-end; background: rgba(125,211,252,.10);
+    border: 1px solid rgba(125,211,252,.22); color: var(--text);
+    border-bottom-right-radius: 3px;
+  }
+  .msg.bot {
+    align-self: flex-start; background: var(--panel);
+    border: 1px solid var(--border); color: var(--text);
+    border-bottom-left-radius: 3px;
+  }
+  .msg.bot.thinking { color: var(--muted); font-style: italic; }
   #chatRow { flex: none; display: flex; gap: 5px; }
   #chatIn {
     flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--border);
@@ -375,6 +387,7 @@ function connect() {
   };
 
   ws.onclose = () => {
+    if (pendingMsg) { pendingMsg.textContent = "(connection lost)"; pendingMsg.classList.remove("thinking"); pendingMsg = null; }
     setStatus("retrying…", "err");
     log("[ws] disconnected");
     reconnectTimer = setTimeout(connect, 2000);
@@ -394,10 +407,31 @@ undoBtn.onclick = (e) => {
 // ── чат із Claude (headless через bridge) ────────────────────────────────
 const chatOut = document.getElementById("chatOut");
 const chatIn = document.getElementById("chatIn");
+let pendingMsg = null; // елемент «thinking…», що чекає на відповідь
+function addMsg(role, text, thinking) {
+  const d = document.createElement("div");
+  d.className = "msg " + role + (thinking ? " thinking" : "");
+  d.textContent = text;
+  chatOut.appendChild(d);
+  while (chatOut.children.length > 40) chatOut.firstChild.remove();
+  chatOut.classList.add("open");
+  chatOut.scrollTop = chatOut.scrollHeight;
+  fitHeight();
+  return d;
+}
 function chatShow(text, thinking) {
-  chatOut.textContent = text || "";
-  chatOut.classList.toggle("open", !!text);
-  chatOut.classList.toggle("thinking", !!thinking);
+  if (thinking) {
+    if (pendingMsg) { pendingMsg.textContent = text; }
+    else pendingMsg = addMsg("bot", text, true);
+    chatOut.scrollTop = chatOut.scrollHeight;
+  } else {
+    if (pendingMsg) {
+      pendingMsg.classList.remove("thinking");
+      pendingMsg.textContent = text;
+      pendingMsg = null;
+    } else addMsg("bot", text);
+    chatOut.scrollTop = chatOut.scrollHeight;
+  }
   fitHeight();
 }
 const mSel = document.getElementById("mSel");
@@ -416,6 +450,7 @@ chatIn.onkeydown = (e) => {
   if (!ws || ws.readyState !== WebSocket.OPEN) { chatShow("bridge disconnected", false); return; }
   ws.send(JSON.stringify({ type: "chat", text, model: mSel.value || null, effort: eSel.value || null }));
   chatIn.value = "";
+  addMsg("user", text);
   const isUrl = text.startsWith("http://") || text.startsWith("https://");
   startTask("chat", isUrl ? "importing page…" : "Claude: " + text.slice(0, 28) + "…");
   chatShow("thinking…", true);
