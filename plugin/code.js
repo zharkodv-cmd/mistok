@@ -14,6 +14,8 @@ let isMini = false;
     const model = await figma.clientStorage.getAsync("mistok:model");
     const effort = await figma.clientStorage.getAsync("mistok:effort");
     if (model || effort) figma.ui.postMessage({ type: "prefsstate", model: model || "", effort: effort || "" });
+    const chat = await figma.clientStorage.getAsync("mistok:chat");
+    if (chat) { try { figma.ui.postMessage({ type: "chathiststate", hist: JSON.parse(chat) }); } catch (e) {} }
   } catch (e) {}
 })();
 
@@ -1043,6 +1045,10 @@ const HELPERS = {
 // ──────────────────────────────────────────────────────────────────────────
 
 figma.ui.onmessage = async (msg) => {
+  if (msg.type === "chathist") {
+    try { await figma.clientStorage.setAsync("mistok:chat", JSON.stringify((msg.hist || []).slice(-40))); } catch (e) {}
+    return;
+  }
   if (msg.type === "prefs") {
     try {
       await figma.clientStorage.setAsync("mistok:model", msg.model || "");

@@ -547,6 +547,8 @@ async def run_protocol(phrase: str, label: str, timeout_s: int = 900, model: str
         payload = {"type": "chatreply", "task": kind, "text": report}
         if img_uri:
             payload["img"] = img_uri
+        if m:
+            payload["node"] = m.group(1)
         await send_plugin(payload)
         print(f"[proto-run] done: {label} rc={proc.returncode}", flush=True)
     except Exception as e:
@@ -810,6 +812,19 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                 print(f"[plugin] hello v{m.get('version', '?')}")
                 continue
             if mtype == "pong":
+                continue
+            if mtype == "rmnode":
+                nid = m.get("id")
+                if nid:
+                    code = (f"const n = await figma.getNodeByIdAsync('{nid}');"
+                            "if (!n) return 'gone';"
+                            "const nm = n.name; n.remove(); figma.commitUndo();"
+                            "figma.notify('Removed: ' + nm); return nm;")
+                    try:
+                        await asyncio.to_thread(urllib_request_json,
+                            "http://127.0.0.1:8787/exec", {"code": code, "timeout": 30})
+                    except Exception as e:
+                        print(f"[rmnode] {e}", flush=True)
                 continue
             if mtype == "kill":
                 killed = []

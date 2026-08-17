@@ -143,6 +143,12 @@
   }
   .msg.bot.thinking { color: var(--muted); font-style: italic; }
   .msg img { display: block; max-width: 100%; border-radius: 6px; margin-top: 6px; border: 1px solid var(--border); }
+  .msg .rmres {
+    display: inline-block; margin-top: 6px; padding: 2px 8px; font-size: 10px;
+    border: 1px solid var(--border); border-radius: 4px; background: transparent;
+    color: var(--muted); cursor: pointer;
+  }
+  .msg .rmres:hover { color: var(--err); border-color: rgba(248,113,113,.4); }
   #chatRow { flex: none; display: flex; gap: 5px; }
   #chatIn {
     flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border);
@@ -385,7 +391,7 @@ function connect() {
     } else if (msg.type === "chatreply") {
       if (msg.task && msg.task !== "chat") endTask("bg:" + msg.task);
       else endTask("chat");
-      chatShow(msg.text, false, msg.img || null);
+      chatShow(msg.text, false, msg.img || null, msg.node || null);
     } else if (msg.type === "ping") {
       try { ws.send(JSON.stringify({ type: "pong" })); } catch (e) {}
     }
@@ -422,7 +428,15 @@ undoBtn.onclick = (e) => {
 const chatOut = document.getElementById("chatOut");
 const chatIn = document.getElementById("chatIn");
 let pendingMsg = null; // елемент «thinking…», що чекає на відповідь
-function addMsg(role, text, thinking) {
+let histArr = [];      // персистентна історія (текст, без картинок)
+let histTimer = null;
+function saveHist() {
+  clearTimeout(histTimer);
+  histTimer = setTimeout(() => {
+    parent.postMessage({ pluginMessage: { type: "chathist", hist: histArr.slice(-40) } }, "*");
+  }, 800);
+}
+function addMsg(role, text, thinking, skipHist) {
   const d = document.createElement("div");
   d.className = "msg " + role + (thinking ? " thinking" : "");
   d.textContent = text;
@@ -430,10 +444,11 @@ function addMsg(role, text, thinking) {
   while (chatOut.children.length > 40) chatOut.firstChild.remove();
   chatOut.classList.add("open");
   chatOut.scrollTop = chatOut.scrollHeight;
+  if (!thinking && !skipHist) { histArr.push({ r: role, t: text }); saveHist(); }
   fitHeight();
   return d;
 }
-function chatShow(text, thinking, img) {
+function chatShow(text, thinking, img, node) {
   if (thinking) {
     if (pendingMsg) { pendingMsg.textContent = text; }
     else pendingMsg = addMsg("bot", text, true);
@@ -444,12 +459,25 @@ function chatShow(text, thinking, img) {
       pendingMsg.textContent = text;
       el = pendingMsg;
       pendingMsg = null;
+      histArr.push({ r: "bot", t: text });
+      saveHist();
     } else el = addMsg("bot", text);
     if (img) {
       const im = document.createElement("img");
       im.src = img;
       el.appendChild(im);
       im.onload = () => { chatOut.scrollTop = chatOut.scrollHeight; fitHeight(); };
+    }
+    if (node) {
+      const rb = document.createElement("button");
+      rb.className = "rmres";
+      rb.textContent = "✕ remove result";
+      rb.onclick = () => {
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "rmnode", id: node }));
+        rb.textContent = "removed";
+        rb.disabled = true;
+      };
+      el.appendChild(rb);
     }
   }
   chatOut.scrollTop = chatOut.scrollHeight;
@@ -648,6 +676,11 @@ window.onmessage = (e) => {
   const m = e.data && e.data.pluginMessage;
   if (!m) return;
   if (m.type === "uistate") { setMini(!!m.mini, false); return; }
+  if (m.type === "chathiststate") {
+    histArr = Array.isArray(m.hist) ? m.hist : [];
+    for (const h of histArr) addMsg(h.r === "user" ? "user" : "bot", h.t, false, true);
+    return;
+  }
   if (m.type === "prefsstate") {
     if (m.model != null) mSel.value = m.model;
     if (m.effort != null) eSel.value = m.effort;
