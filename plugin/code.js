@@ -471,6 +471,80 @@ async function opAutoLayout(roots, res) {
   res.changes.push("layout snapshot: " + targets.map((t) => t.name).join(", ") + " → Claude plans the auto-layout");
 }
 
+// snap до колонок layout grid: x і ширина до колонок; y не чіпаємо
+async function opGrid(roots, res) {
+  for (const root of roots) {
+    let host = root;
+    while (host && !(host.layoutGrids || []).some((g) => g.pattern === "COLUMNS" && g.visible !== false)) {
+      host = host.parent;
+      if (!host || host.type === "PAGE") { host = null; break; }
+    }
+    if (!host || !root.children) { res.skipped.push(root.name + " (no COLUMNS layout grid)"); continue; }
+    const grid = host.layoutGrids.find((g) => g.pattern === "COLUMNS" && g.visible !== false);
+    const count = grid.count, gutter = grid.gutterSize || 0;
+    let colW, colX0;
+    if (grid.alignment === "STRETCH") {
+      const offset = grid.offset || 0;
+      colW = (host.width - offset * 2 - gutter * (count - 1)) / count;
+      colX0 = offset;
+    } else if (grid.alignment === "CENTER") {
+      colW = grid.sectionSize || 60;
+      const total = count * colW + (count - 1) * gutter;
+      colX0 = (host.width - total) / 2;
+    } else {
+      colW = grid.sectionSize || 60;
+      colX0 = grid.alignment === "MAX"
+        ? host.width - (grid.offset || 0) - (count * colW + (count - 1) * gutter)
+        : (grid.offset || 0);
+    }
+    const shift = host === root ? 0 : (root.absoluteTransform[0][2] - host.absoluteTransform[0][2]);
+    const colX = (i) => colX0 + i * (colW + gutter);
+    const snapX = (x) => {
+      let best = colX(0), bd = Infinity;
+      for (let i = 0; i < count; i++) { const d = Math.abs(colX(i) - x); if (d < bd) { bd = d; best = colX(i); } }
+      return Math.round(best);
+    };
+    const snapW = (w) => {
+      let best = colW, bd = Infinity;
+      for (let n = 1; n <= count; n++) {
+        const cw = n * colW + (n - 1) * gutter;
+        const d = Math.abs(cw - w);
+        if (d < bd) { bd = d; best = cw; }
+      }
+      return Math.round(best);
+    };
+    if (root.type === "INSTANCE") { res.skipped.push(root.name + " (instance internals are locked)"); continue; }
+    for (const n of root.children) {
+      if (typeof n.x !== "number") continue;
+      const hx = n.x + shift;
+      const nx = snapX(hx) - shift;
+      const nw = typeof n.resize === "function" && n.type !== "TEXT" ? snapW(n.width) : null;
+      const moved = Math.abs(nx - n.x) > 0.5;
+      const sized = nw !== null && Math.abs(nw - n.width) > 0.5;
+      try {
+        if (moved) n.x = nx;
+        if (sized) n.resize(nw, n.height);
+        if (moved || sized) res.changes.push(n.name + " → x:" + Math.round(nx + shift) + (sized ? " w:" + nw : ""));
+      } catch (e) { res.skipped.push(n.name + " (locked)"); }
+    }
+  }
+  if (!res.changes.length && !res.skipped.length) res.skipped.push("nothing to align");
+}
+
+// збір текстів на вичитку — виконує headless Claude через bridge
+async function opSpell(roots, res) {
+  const texts = [];
+  for (const n of walkAll(roots)) {
+    if (n.type !== "TEXT") continue;
+    const s = n.characters;
+    if (s && s.trim().length >= 2) texts.push({ id: n.id, text: s.slice(0, 500) });
+    if (texts.length >= 120) break;
+  }
+  if (!texts.length) throw new Error("no texts in the selection");
+  res.spell = { texts };
+  res.changes.push("sent to spellcheck: " + texts.length + " texts → Claude runs in background");
+}
+
 // запит на редизайн секції за референсами awwwards — виконує Claude-сесія
 async function opRedesign(roots, res) {
   const root = roots[0];
