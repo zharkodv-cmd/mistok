@@ -750,6 +750,11 @@ const HELPERS = {
 // ──────────────────────────────────────────────────────────────────────────
 
 figma.ui.onmessage = async (msg) => {
+  if (msg.type === "undo") {
+    figma.triggerUndo();
+    figma.notify("↩ відкат");
+    return;
+  }
   if (msg.type === "op") {
     const sel = figma.currentPage.selection;
     if (!sel.length) { figma.notify("Нічого не виділено"); return; }
@@ -767,6 +772,7 @@ figma.ui.onmessage = async (msg) => {
         changes: res.changes.slice(0, 80), skipped: res.skipped.slice(0, 80),
       });
       if (res.request) figma.ui.postMessage({ type: "imgrequest", request: res.request });
+      figma.commitUndo(); // кожна операція = окремий крок undo
     } catch (e) {
       figma.notify("Помилка " + OP_NAMES[msg.kind] + ": " + ((e && e.message) || e));
     }
@@ -828,6 +834,7 @@ figma.ui.onmessage = async (msg) => {
       text: asText(result, logs),
       value: safeStringify(result),
     });
+    figma.commitUndo(); // кожен exec = окремий крок undo
   } catch (e) {
     figma.ui.postMessage({
       type: "error",

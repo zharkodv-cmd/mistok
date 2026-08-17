@@ -37,13 +37,14 @@
   }
   button { transition: background .15s; }
   button:active { transform: translateY(1px); }
-  #toggle {
+  #toggle, #undoBtn {
     border: 1px solid var(--border); background: transparent; border-radius: 5px;
     width: 22px; height: 22px; cursor: pointer; color: var(--muted);
     font-size: 14px; padding: 0; flex: none;
     display: grid; place-items: center;
   }
-  #toggle:hover { background: var(--panel); color: var(--text); }
+  #toggle:hover, #undoBtn:hover { background: var(--panel); color: var(--text); }
+  body.mini #undoBtn { display: none; }
 
   #stats {
     font-family: ui-monospace, monospace; font-size: 10px; color: var(--muted);
@@ -160,6 +161,7 @@
     <span id="brand">Mistok</span>
     <span id="status" title="ws://localhost:8787/plugin">connecting…</span>
     <span id="count" title="виконань за сесію bridge">0</span>
+    <button id="undoBtn" data-tip="Undo" title="Відкотити останню дію (triggerUndo)"></button>
     <button id="toggle" title="Згорнути / розгорнути">–</button>
   </div>
   <div id="limits"></div>
@@ -317,6 +319,16 @@ function connect() {
     reconnectTimer = setTimeout(connect, 2000);
   };
 }
+
+// ── undo ─────────────────────────────────────────────────────────────────
+const undoBtn = document.getElementById("undoBtn");
+undoBtn.innerHTML = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
+  'stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M6.5 3.5L3 7l3.5 3.5"/><path d="M3 7h6.5a3.5 3.5 0 013.5 3.5v2"/></svg>';
+undoBtn.onclick = (e) => {
+  e.stopPropagation();
+  parent.postMessage({ pluginMessage: { type: "undo" } }, "*");
+};
 
 // ── чат із Claude (headless через bridge) ────────────────────────────────
 const chatOut = document.getElementById("chatOut");
