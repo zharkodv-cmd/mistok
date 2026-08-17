@@ -34,7 +34,7 @@ PowerShell / curl / Claude Code     bridge.py (Python)         Figma Desktop
 - **One Python file** server + **one Python file** CLI, ~500 lines total. No npm. No frameworks.
 - **Custom Figma plugin**, ~250 lines (JS + HTML). Imported in dev mode — no publishing.
 - **15 helpers** baked into the plugin runtime as `h.*` so scripts stay short and safe (`h.bF`, `h.setText`, `h.withFonts`, `h.cloneNext`, `h.variantsOf`, …).
-- **9 high-level CLI subcommands** for common ops (`tree`, `find`, `text`, `variant`, `clone`, `rm`, `icomp`, …).
+- **12 high-level CLI subcommands** for common ops (`tree`, `find`, `text`, `variant`, `clone`, `rm`, `icomp`, `shot`, `spec`, `vars`, …).
 - **Smart error hints** in responses — when a script fails with a known-pattern error, the response includes a `hint` field telling you how to fix it.
 - **Works while Figma is minimized.** WebSocket stays alive; JavaScript keeps executing in the background.
 - **Auto-reconnect** in the plugin UI — restart the server, plugin reconnects within 2 s.
@@ -178,8 +178,14 @@ python figmosha.py variant 1:30 "Property 1=Default"
 python figmosha.py clone 1:23 --right --gap 100  # clone adjacent
 python figmosha.py rm 1:99                       # delete a node
 python figmosha.py icomp <component-key>         # import library component, place + zoom
+python figmosha.py shot 1:23 hero.png --scale 2  # export node as PNG to a local file
+python figmosha.py spec 1:23 --depth 3           # compact design spec: geometry, auto-layout,
+                                                 #   fills/strokes as hex or var(name), typography
+python figmosha.py vars                          # all local variables by collection (aliases as →name)
 python figmosha.py status                        # bridge + plugin connection state
 ```
+
+`spec` and `vars` print **compact single-line JSON** — designed for AI agents that pay per token. `shot` decodes the PNG locally, so no base64 ever hits your terminal.
 
 ## Code conventions
 
@@ -212,6 +218,8 @@ new Function("figma", "print", "h", `return (async () => { <YOUR CODE> })();`)(f
 | `await h.var_(idOrKey)` | Resolve variable from id or instance |
 | `await h.importComp(key)` | `figma.importComponentByKeyAsync(key)` |
 | `await h.importVar(key)` | `figma.variables.importVariableByKeyAsync(key)` |
+| `await h.spec(node, {maxDepth})` | Compact design spec of subtree — geometry, layout, fills as hex/`var(name)`, typography |
+| `await h.varsDump()` | All local variables grouped by collection, aliases resolved to `→name` |
 
 Compared to inlined boilerplate, helpers reduce a typical script by ~60–70% and avoid common gotchas (frozen `node.fills`, missing `loadFontAsync`, deprecated sync `getVariableById`).
 

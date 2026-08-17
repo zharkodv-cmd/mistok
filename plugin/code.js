@@ -156,6 +156,109 @@ const HELPERS = {
       : { current: main.name, groups: null, all: null };
   },
 
+  // Compact design spec of a subtree — geometry, auto-layout, fills/strokes
+  // as hex or var(name), typography, effects. Skips invisible nodes and defaults.
+  async spec(node, opts) {
+    opts = opts || {};
+    const maxDepth = opts.maxDepth == null ? 99 : opts.maxDepth;
+    const varNames = {};
+    const varName = async (id) => {
+      if (varNames[id]) return varNames[id];
+      try {
+        const v = await figma.variables.getVariableByIdAsync(id);
+        return (varNames[id] = v ? v.name : id);
+      } catch (e) { return id; }
+    };
+    const to2 = (x) => Math.round(x * 255).toString(16).padStart(2, "0");
+    const hex = (c) => "#" + to2(c.r) + to2(c.g) + to2(c.b);
+    const paint = async (p) => {
+      if (!p || p.visible === false) return null;
+      const bv = p.boundVariables && p.boundVariables.color;
+      if (bv) return "var(" + (await varName(bv.id)) + ")";
+      if (p.type === "SOLID") {
+        const op = p.opacity != null && p.opacity < 1 ? "@" + Math.round(p.opacity * 100) + "%" : "";
+        return hex(p.color) + op;
+      }
+      return p.type; // GRADIENT_LINEAR, IMAGE, …
+    };
+    const walk = async (n, d) => {
+      const o = { id: n.id, name: n.name, type: n.type };
+      if (n.width !== undefined) {
+        o.w = Math.round(n.width); o.h = Math.round(n.height);
+        o.x = Math.round(n.x); o.y = Math.round(n.y);
+      }
+      if (n.layoutMode && n.layoutMode !== "NONE") {
+        o.layout = n.layoutMode + " gap:" + n.itemSpacing +
+          " pad:" + [n.paddingTop, n.paddingRight, n.paddingBottom, n.paddingLeft].join(",") +
+          " " + n.primaryAxisSizingMode + "/" + n.counterAxisSizingMode;
+        if (n.primaryAxisAlignItems !== "MIN") o.justify = n.primaryAxisAlignItems;
+        if (n.counterAxisAlignItems !== "MIN") o.align = n.counterAxisAlignItems;
+      }
+      if (Array.isArray(n.fills) && n.fills.length) {
+        const fs = [];
+        for (const p of n.fills) { const s = await paint(p); if (s) fs.push(s); }
+        if (fs.length) o.fills = fs;
+      }
+      if (Array.isArray(n.strokes) && n.strokes.length) {
+        const ss = [];
+        for (const p of n.strokes) { const s = await paint(p); if (s) ss.push(s); }
+        if (ss.length) { o.strokes = ss; o.strokeW = n.strokeWeight; }
+      }
+      if (typeof n.cornerRadius === "number" && n.cornerRadius > 0) o.radius = n.cornerRadius;
+      if (n.opacity != null && n.opacity < 1) o.opacity = Math.round(n.opacity * 100) / 100;
+      if (n.type === "TEXT") {
+        o.text = n.characters;
+        if (typeof n.fontName !== "symbol") o.font = n.fontName.family + " " + n.fontName.style;
+        if (typeof n.fontSize !== "symbol") o.fontSize = n.fontSize;
+        if (typeof n.lineHeight !== "symbol" && n.lineHeight.unit !== "AUTO")
+          o.lineH = n.lineHeight.value + (n.lineHeight.unit === "PERCENT" ? "%" : "px");
+        if (typeof n.letterSpacing !== "symbol" && n.letterSpacing.value)
+          o.letterS = n.letterSpacing.value + (n.letterSpacing.unit === "PERCENT" ? "%" : "px");
+        if (n.textAlignHorizontal !== "LEFT") o.textAlign = n.textAlignHorizontal;
+      }
+      if (n.effects && n.effects.length) {
+        const ef = n.effects.filter((e) => e.visible !== false)
+          .map((e) => e.type + " " + (e.radius || 0) + "px");
+        if (ef.length) o.effects = ef;
+      }
+      if (n.children && d < maxDepth) {
+        o.children = [];
+        for (const c of n.children) if (c.visible !== false) o.children.push(await walk(c, d + 1));
+      }
+      return o;
+    };
+    return await walk(node, 0);
+  },
+
+  // Dump all local variables grouped by collection; aliases as →name, colors as hex
+  async varsDump() {
+    const to2 = (x) => Math.round(x * 255).toString(16).padStart(2, "0");
+    const out = {};
+    const cols = await figma.variables.getLocalVariableCollectionsAsync();
+    for (const col of cols) {
+      const vars = [];
+      for (const id of col.variableIds) {
+        const v = await figma.variables.getVariableByIdAsync(id);
+        if (!v) continue;
+        const vals = {};
+        for (const m of col.modes) {
+          let val = v.valuesByMode[m.modeId];
+          if (val && val.type === "VARIABLE_ALIAS") {
+            const t = await figma.variables.getVariableByIdAsync(val.id);
+            val = "→" + (t ? t.name : val.id);
+          } else if (val && val.r !== undefined) {
+            val = "#" + to2(val.r) + to2(val.g) + to2(val.b) + (val.a < 1 ? to2(val.a) : "");
+          }
+          vals[m.name] = val;
+        }
+        vars.push({ name: v.name, type: v.resolvedType, id: v.id,
+          value: col.modes.length === 1 ? vals[col.modes[0].name] : vals });
+      }
+      out[col.name] = { modes: col.modes.map((m) => m.name), count: vars.length, vars };
+    }
+    return out;
+  },
+
   // Quick async accessors
   async node(id)      { return await figma.getNodeByIdAsync(id); },
   async var_(idOrKey) { return await resolveVar(idOrKey); },

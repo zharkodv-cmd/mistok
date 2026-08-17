@@ -17,6 +17,9 @@ python figmosha.py "return figma.currentPage.name"
 # High-level commands (covered below) save tokens for common operations
 python figmosha.py text 185:21880 "Привіт"
 python figmosha.py variant 185:21883 "Property 1=Default"
+python figmosha.py shot 185:21880 out.png --scale 2   # PNG export straight to file — NO base64 in context
+python figmosha.py spec 185:21880 --depth 3           # design spec, compact JSON — use INSTEAD of custom extraction JS
+python figmosha.py vars                               # all local variables by collection
 
 # Quick HTTP (no Python needed)
 curl -s -X POST http://localhost:8787/exec \
@@ -52,6 +55,8 @@ The plugin runtime exposes a small helper namespace. Use these to keep scripts s
 | `await h.var_(idOrKey)` | Resolve a variable from id or instance |
 | `await h.importComp(key)` | `figma.importComponentByKeyAsync(key)` |
 | `await h.importVar(key)` | `figma.variables.importVariableByKeyAsync(key)` |
+| `await h.spec(node, {maxDepth})` | Compact design spec — geometry, layout, fills as hex/`var(name)`, typography |
+| `await h.varsDump()` | Local variables by collection, aliases as `→name`, colors as hex |
 
 **Use them.** Compared to inline boilerplate, helpers save ~70% of the script and avoid common mistakes (frozen `node.fills`, missing `loadFontAsync`, etc.).
 

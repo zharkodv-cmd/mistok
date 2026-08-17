@@ -13,6 +13,9 @@ Commands:
     figmosha clone <id> [--right|--left|--up|--down] [--gap N] [--name N]
     figmosha rm <id>                  # remove node
     figmosha import-component <key>   # import library component, instantiate, focus
+    figmosha shot <id> out.png [--scale 2]   # export node as PNG to local file
+    figmosha spec <id> [--depth N]    # compact design spec (geometry, fills, typography)
+    figmosha vars                     # dump local variables by collection
     figmosha "<js>"                   # shorthand for `exec`
 
 Helpers available inside exec'd code (as `h.*`):
@@ -39,6 +42,7 @@ PORT = 8787
 KNOWN_CMDS = {
     "exec", "status", "tree", "find", "text", "variant",
     "clone", "rm", "import-component", "icomp",
+    "shot", "spec", "vars",
 }
 
 
@@ -237,6 +241,48 @@ def cmd_import_component(args):
     return _emit(_exec(code, args.timeout)[1], raw=args.raw)
 
 
+def cmd_shot(args):
+    code = (
+        f"const n = await figma.getNodeByIdAsync({json.dumps(args.node_id)});"
+        f"if (!n) throw new Error('node not found: ' + {json.dumps(args.node_id)});"
+        f"const bytes = await n.exportAsync({{format: 'PNG', constraint: {{type: 'SCALE', value: {args.scale}}}}});"
+        f"return figma.base64Encode(bytes);"
+    )
+    _status, resp = _exec(code, args.timeout)
+    if not resp.get("ok"):
+        return _emit(resp)
+    import base64
+    data = base64.b64decode(resp["value"])
+    with open(args.out, "wb") as f:
+        f.write(data)
+    print(f"{args.out}  {len(data)} bytes  ({resp.get('elapsed_ms', '?')}ms)")
+    return 0
+
+
+def cmd_spec(args):
+    code = (
+        f"const n = await figma.getNodeByIdAsync({json.dumps(args.node_id)});"
+        f"if (!n) throw new Error('node not found: ' + {json.dumps(args.node_id)});"
+        f"return await h.spec(n, {{maxDepth: {args.depth}}});"
+    )
+    _status, resp = _exec(code, args.timeout)
+    if not resp.get("ok"):
+        return _emit(resp)
+    # compact JSON — token-friendly for agents
+    print(json.dumps(resp["value"], ensure_ascii=False, separators=(",", ":")))
+    print(f"  ({resp.get('elapsed_ms', '?')}ms)", file=sys.stderr)
+    return 0
+
+
+def cmd_vars(args):
+    _status, resp = _exec("return await h.varsDump();", args.timeout)
+    if not resp.get("ok"):
+        return _emit(resp)
+    print(json.dumps(resp["value"], ensure_ascii=False, separators=(",", ":")))
+    print(f"  ({resp.get('elapsed_ms', '?')}ms)", file=sys.stderr)
+    return 0
+
+
 # ─── argparse / dispatch ───────────────────────────────────────────────────
 
 def _add_common_flags(p):
@@ -302,6 +348,20 @@ def build_parser():
         _add_common_flags(p)
         p.add_argument("key")
 
+    p_shot = sub.add_parser("shot")
+    _add_common_flags(p_shot)
+    p_shot.add_argument("node_id")
+    p_shot.add_argument("out")
+    p_shot.add_argument("--scale", type=float, default=1)
+
+    p_spec = sub.add_parser("spec")
+    _add_common_flags(p_spec)
+    p_spec.add_argument("node_id")
+    p_spec.add_argument("--depth", type=int, default=99)
+
+    p_vars = sub.add_parser("vars")
+    _add_common_flags(p_vars)
+
     return ap
 
 
@@ -336,6 +396,9 @@ def main():
         "rm": cmd_rm,
         "import-component": cmd_import_component,
         "icomp": cmd_import_component,
+        "shot": cmd_shot,
+        "spec": cmd_spec,
+        "vars": cmd_vars,
     }
     sys.exit(dispatch[args.cmd](args))
 

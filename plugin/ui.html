@@ -3,56 +3,104 @@
 <head>
 <style>
   * { box-sizing: border-box; }
-  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 12px; font-size: 13px; color: #222; }
+  :root {
+    --bg: #1e1e22; --panel: #131316; --border: #2e2e34;
+    --text: #e6e6ea; --muted: #8a8a93;
+    --ok: #4ade80; --err: #f87171; --pend: #fbbf24; --accent: #7dd3fc;
+  }
+  body {
+    font-family: "Inter", system-ui, -apple-system, sans-serif;
+    margin: 0; padding: 10px; font-size: 12px;
+    background: var(--bg); color: var(--text);
+  }
   .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-  #status { padding: 3px 8px; border-radius: 10px; font-family: monospace; font-size: 11px; }
-  .ok { background: #d4f4dd; color: #0a7d2f; }
-  .err { background: #ffe0e0; color: #b00020; }
-  .pending { background: #fff3cd; color: #856404; }
-  #log { background: #f5f5f5; padding: 8px; border-radius: 4px; height: 180px; overflow-y: auto; font-family: monospace; font-size: 11px; white-space: pre-wrap; margin: 0; }
-  .muted { color: #777; font-size: 11px; }
-  #toggle { margin-left: auto; border: 1px solid #ddd; background: #fff; border-radius: 4px;
-            width: 22px; height: 22px; line-height: 1; cursor: pointer; color: #555; font-size: 14px; padding: 0; }
-  #toggle:hover { background: #f0f0f0; }
+  #dot {
+    width: 8px; height: 8px; border-radius: 50%; flex: none;
+    background: var(--pend); transition: background .2s;
+  }
+  #dot.ok  { background: var(--ok);  box-shadow: 0 0 6px rgba(74,222,128,.6); }
+  #dot.err { background: var(--err); box-shadow: 0 0 6px rgba(248,113,113,.5); }
+  #dot.pending { background: var(--pend); animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  #brand { font-weight: 600; font-size: 12px; letter-spacing: .2px; }
+  #status { font-family: ui-monospace, monospace; font-size: 10px; color: var(--muted); }
+  #count {
+    font-family: ui-monospace, monospace; font-size: 10px; color: var(--accent);
+    background: rgba(125,211,252,.08); border: 1px solid rgba(125,211,252,.18);
+    border-radius: 9px; padding: 1px 7px;
+  }
+  #server { color: var(--muted); font-size: 10px; font-family: ui-monospace, monospace;
+            margin-left: auto; }
+  #toggle {
+    border: 1px solid var(--border); background: transparent; border-radius: 5px;
+    width: 22px; height: 22px; line-height: 1; cursor: pointer; color: var(--muted);
+    font-size: 14px; padding: 0; flex: none;
+  }
+  #toggle:hover { background: var(--panel); color: var(--text); }
+  #log {
+    background: var(--panel); border: 1px solid var(--border);
+    padding: 8px; border-radius: 6px; height: 180px; overflow-y: auto;
+    font-family: ui-monospace, "SF Mono", monospace; font-size: 10.5px;
+    line-height: 1.5; margin: 0; white-space: pre-wrap; word-break: break-all;
+  }
+  #log .t { color: #55555e; }
+  #log .ok { color: var(--ok); }
+  #log .err { color: var(--err); }
+  #log .exec { color: var(--accent); }
+  #log .ws { color: var(--muted); }
+  #log div { min-height: 1em; }
 
-  /* згорнутий режим */
+  /* згорнутий режим — темна пігулка */
   body.mini { padding: 0; cursor: pointer; }
-  body.mini .row { margin: 0; height: 40px; padding: 0 10px; gap: 6px; }
-  body.mini #log, body.mini #server, body.mini .label { display: none; }
-  body.mini #status { font-size: 0; width: 9px; height: 9px; padding: 0; border-radius: 50%; flex: none; }
-  body.mini #dot-label { display: inline; font-size: 11px; color: #666; font-family: monospace; }
-  #dot-label { display: none; }
+  body.mini .row { margin: 0; height: 40px; padding: 0 12px; gap: 7px; }
+  body.mini #log, body.mini #server, body.mini #status, body.mini #count { display: none; }
+  body.mini #brand { font-size: 11px; color: var(--muted); }
 </style>
 </head>
 <body>
   <div class="row">
-    <span class="label">bridge:</span>
-    <span id="status" class="pending">connecting…</span>
-    <span id="dot-label">figmosha</span>
-    <span class="muted" id="server">ws://localhost:8787/plugin</span>
+    <span id="dot" class="pending"></span>
+    <span id="brand">Figmosha</span>
+    <span id="status">connecting…</span>
+    <span id="count">0</span>
+    <span id="server">:8787</span>
     <button id="toggle" title="Згорнути / розгорнути">–</button>
   </div>
-  <pre id="log">[ui] booting</pre>
+  <pre id="log"></pre>
 
 <script>
 const SERVER = "ws://localhost:8787/plugin";
+const dotEl = document.getElementById("dot");
 const statusEl = document.getElementById("status");
+const countEl = document.getElementById("count");
 const logEl = document.getElementById("log");
 let ws = null;
 let reconnectTimer = null;
+let execCount = 0;
 const recentLog = [];
+
+function classify(line) {
+  if (line.startsWith("[ok]")) return "ok";
+  if (line.startsWith("[err]") || line.startsWith("[drop]") || line.startsWith("[send]")) return "err";
+  if (line.startsWith("[exec]")) return "exec";
+  return "ws";
+}
 
 function log(line) {
   const ts = new Date().toTimeString().slice(0, 8);
-  recentLog.push(`[${ts}] ${line}`);
+  recentLog.push({ ts, line });
   if (recentLog.length > 80) recentLog.shift();
-  logEl.textContent = recentLog.join("\n");
+  logEl.innerHTML = recentLog.map(({ ts, line }) => {
+    const cls = classify(line);
+    const esc = line.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    return `<div><span class="t">${ts}</span> <span class="${cls}">${esc}</span></div>`;
+  }).join("");
   logEl.scrollTop = logEl.scrollHeight;
 }
 
 function setStatus(text, cls) {
   statusEl.textContent = text;
-  statusEl.className = cls;
+  dotEl.className = cls;
 }
 
 function shortId(id) {
@@ -73,7 +121,7 @@ function connect() {
   ws.onopen = () => {
     setStatus("connected", "ok");
     log("[ws] connected");
-    try { ws.send(JSON.stringify({ type: "hello", version: "2.0" })); } catch (e) {}
+    try { ws.send(JSON.stringify({ type: "hello", version: "2.1" })); } catch (e) {}
   };
 
   ws.onmessage = (e) => {
@@ -83,6 +131,8 @@ function connect() {
       return;
     }
     if (msg.type === "exec") {
+      execCount++;
+      countEl.textContent = execCount;
       log(`[exec] ${shortId(msg.id)} code=${(msg.code || "").length}b`);
       parent.postMessage({ pluginMessage: { type: "exec", id: msg.id, code: msg.code } }, "*");
     } else if (msg.type === "ping") {
@@ -96,7 +146,7 @@ function connect() {
   };
 
   ws.onclose = () => {
-    setStatus("disconnected, retrying…", "err");
+    setStatus("retrying…", "err");
     log("[ws] disconnected");
     reconnectTimer = setTimeout(connect, 2000);
   };
@@ -134,6 +184,7 @@ window.onmessage = (e) => {
   else if (m.type === "log") {/* skip — would spam */}
 };
 
+log("[ui] booting");
 connect();
 </script>
 </body>
