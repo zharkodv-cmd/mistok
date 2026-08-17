@@ -65,6 +65,25 @@
   }
   #ops button:hover { background: var(--bg); color: var(--text); border-color: #3c3c44; }
   #ops button svg, #sel button svg { display: block; }
+  #ops button.on { color: var(--accent); border-color: rgba(125,211,252,.35); }
+
+  #secform { display: none; gap: 6px; align-items: center; flex: none; }
+  #secform.open { display: flex; }
+  #secform label {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 10px; color: var(--muted); font-family: ui-monospace, monospace;
+  }
+  #secform input {
+    width: 52px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 4px; color: var(--text); font-size: 11px; padding: 3px 5px;
+    font-family: ui-monospace, monospace;
+  }
+  #secform input:focus { outline: none; border-color: rgba(125,211,252,.4); }
+  #secform button {
+    flex: 1; height: 24px; border: 1px solid var(--border); background: var(--panel);
+    border-radius: 4px; color: var(--text); cursor: pointer; font-size: 11px;
+  }
+  #secform button:hover { background: var(--bg); }
 
   #sel {
     display: flex; align-items: center; gap: 6px; flex: none;
@@ -104,7 +123,7 @@
   body.mini:hover { background: var(--panel); }
   body.mini #server, body.mini #status, body.mini #count,
   body.mini #stats, body.mini #summary, body.mini #limits, body.mini #sel,
-  body.mini #ops { display: none; }
+  body.mini #ops, body.mini #secform { display: none; }
   body.mini #brand { display: inline; color: var(--muted); }
 </style>
 </head>
@@ -119,6 +138,11 @@
   <div id="limits"></div>
   <div id="sel"></div>
   <div id="ops"></div>
+  <div id="secform">
+    <label>pad <input id="secPad" type="number" value="250"></label>
+    <label>gap <input id="secGap" type="number" value="100"></label>
+    <button id="secApply" title="Загорнути в секцію і розкласти">→ Section</button>
+  </div>
   <div id="stats">очікую статистику…</div>
   <div id="summary"></div>
 
@@ -284,6 +308,7 @@ const ICONS = {
   varsal: I('<path d="M2.5 3v10M13.5 3v10"/><path d="M5.3 8h5.4M6.8 6.3L5.3 8l1.5 1.7M9.2 6.3L10.7 8l-1.5 1.7"/>'),
   varscolor: I('<path d="M8 2.2S4.2 6.8 4.2 9.4a3.8 3.8 0 007.6 0C11.8 6.8 8 2.2 8 2.2z"/><path d="M6.3 9.8a1.7 1.7 0 001.5 1.6"/>'),
   textstyle: I('<path d="M3 4.8V3h10v1.8M8 3v10M6.2 13h3.6"/>'),
+  sectionize: I('<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/>'),
   copy: I('<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 00-1.5-1.5H4A1.5 1.5 0 002.5 3v5A1.5 1.5 0 004 9.5h.5"/>'),
   shot: I('<path d="M2.5 5.8A1.3 1.3 0 013.8 4.5h1.4l1-1.5h3.6l1 1.5h1.4a1.3 1.3 0 011.3 1.3v6.4a1.3 1.3 0 01-1.3 1.3H3.8a1.3 1.3 0 01-1.3-1.3V5.8z"/><circle cx="8" cy="8.8" r="2.3"/>'),
   ok: '<span style="color:var(--ok)">✓</span>',
@@ -295,20 +320,35 @@ const OP_BTNS = [
   { kind: "varsal", title: "Auto-layout відступи/гапи → найближчі variables" },
   { kind: "varscolor", title: "Кольори/текст → найближчі variables" },
   { kind: "textstyle", title: "Текстові ноди → локальні Text Styles (family+style+size)" },
+  { kind: "sectionize", title: "Загорнути виділене в Section і розкласти (pad/gap нижче)" },
 ];
 function renderOps(show) {
   const el = document.getElementById("ops");
-  if (!show) { el.innerHTML = ""; return; }
+  const form = document.getElementById("secform");
+  if (!show) { el.innerHTML = ""; form.classList.remove("open"); return; }
   el.innerHTML = OP_BTNS.map((b) =>
     '<button data-kind="' + b.kind + '" title="' + b.title + '">' + ICONS[b.kind] + "</button>").join("");
   el.querySelectorAll("button").forEach((btn) => {
     btn.onclick = (e) => {
       e.stopPropagation();
+      if (btn.dataset.kind === "sectionize") {
+        form.classList.toggle("open");
+        btn.classList.toggle("on", form.classList.contains("open"));
+        fitHeight();
+        return;
+      }
       parent.postMessage({ pluginMessage: { type: "op", kind: btn.dataset.kind } }, "*");
       flash(btn, ICONS.wait, ICONS[btn.dataset.kind]);
     };
   });
 }
+document.getElementById("secApply").onclick = (e) => {
+  e.stopPropagation();
+  parent.postMessage({ pluginMessage: { type: "op", kind: "sectionize", params: {
+    pad: Number(document.getElementById("secPad").value) || 250,
+    gap: Number(document.getElementById("secGap").value) || 100,
+  } } }, "*");
+};
 
 function renderSel(m) {
   const el = document.getElementById("sel");

@@ -220,8 +220,47 @@ async function opTextStyles(roots, res) {
   }
 }
 
-const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor, textstyle: opTextStyles };
-const OP_NAMES = { clean: "Clean", rename: "Rename", varsal: "AL→vars", varscolor: "Colors→vars", textstyle: "Text styles" };
+// загорнути виділене в SECTION і розкласти вертикально (pad всередині, gap між)
+async function opSectionize(roots, res, params) {
+  const pad = Number(params && params.pad) || 250;
+  const gap = Number(params && params.gap) || 100;
+
+  let section, items;
+  if (roots.length === 1 && roots[0].type === "SECTION") {
+    section = roots[0];
+    items = section.children.slice();
+  } else {
+    const parent = roots[0].parent;
+    if (!roots.every((n) => n.parent === parent)) {
+      throw new Error("виділені ноди мають різних батьків — виділи сусідів");
+    }
+    section = figma.createSection();
+    const minX = Math.min(...roots.map((n) => n.x));
+    const minY = Math.min(...roots.map((n) => n.y));
+    parent.appendChild(section);
+    section.x = minX; section.y = minY;
+    items = roots.slice();
+    const t = roots.map((n) => n.findOne && n.findOne((c) => c.type === "TEXT" && c.characters.trim())).find(Boolean);
+    section.name = t ? t.characters.trim().slice(0, 32) : "Section";
+    for (const n of items) section.appendChild(n);
+    res.changes.push("створено секцію «" + section.name + "» (" + items.length + " ел.)");
+  }
+
+  items.sort((a, b) => a.y - b.y || a.x - b.x);
+  let y = pad, maxW = 0;
+  for (const n of items) {
+    n.x = pad; n.y = y;
+    y += n.height + gap;
+    maxW = Math.max(maxW, n.width);
+    res.changes.push(n.name + " → x:" + pad + " y:" + Math.round(n.y));
+  }
+  section.resizeWithoutConstraints(maxW + pad * 2, y - gap + pad);
+  res.changes.push("секція " + Math.round(section.width) + "×" + Math.round(section.height) +
+    " (pad " + pad + ", gap " + gap + ")");
+}
+
+const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor, textstyle: opTextStyles, sectionize: opSectionize };
+const OP_NAMES = { clean: "Clean", rename: "Rename", varsal: "AL→vars", varscolor: "Colors→vars", textstyle: "Text styles", sectionize: "Sectionize" };
 
 function safeStringify(value) {
   if (value === undefined) return null;
@@ -496,7 +535,7 @@ figma.ui.onmessage = async (msg) => {
     if (!fn) return;
     const res = { changes: [], skipped: [] };
     try {
-      await fn(sel, res);
+      await fn(sel, res, msg.params || {});
       const summary = OP_NAMES[msg.kind] + ": " + res.changes.length + " змін" +
         (res.skipped.length ? ", " + res.skipped.length + " пропущено" : "");
       figma.notify(summary);
