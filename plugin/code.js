@@ -1,4 +1,4 @@
-const UI_SIZE = { open: { w: 320, h: 236 }, mini: { w: 126, h: 36 } };
+const UI_SIZE = { open: { w: 320, h: 290 }, mini: { w: 126, h: 36 } };
 figma.showUI(__html__, { width: UI_SIZE.open.w, height: UI_SIZE.open.h, title: "Mistok" });
 
 // відновити згорнутий стан з минулого запуску

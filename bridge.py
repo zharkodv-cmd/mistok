@@ -30,6 +30,57 @@ START_TIME = time.time()
 EXEC_COUNT = 0
 
 _usage_cache = {"t": 0.0, "data": None}
+_token_cache = {"t": 0.0, "token": None}
+_limits_cache = {"t": 0.0, "data": None}
+
+
+def _oauth_token():
+    """Claude Code OAuth token from macOS Keychain. Cached 10 min."""
+    import subprocess
+    now = time.time()
+    if _token_cache["token"] and now - _token_cache["t"] < 600:
+        return _token_cache["token"]
+    try:
+        raw = subprocess.run(
+            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        token = json.loads(raw).get("claudeAiOauth", {}).get("accessToken")
+    except Exception:
+        token = None
+    _token_cache["t"], _token_cache["token"] = now, token
+    return token
+
+
+def _claude_limits():
+    """Subscription rate-limit bars (session / weekly) from the OAuth usage API. Cached 120s."""
+    import urllib.request
+    now = time.time()
+    if _limits_cache["data"] is not None and now - _limits_cache["t"] < 120:
+        return _limits_cache["data"]
+    token = _oauth_token()
+    if not token:
+        return None
+    try:
+        req = urllib.request.Request(
+            "https://api.anthropic.com/api/oauth/usage",
+            headers={"Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            d = json.loads(r.read())
+        out = []
+        for lim in d.get("limits") or []:
+            out.append({
+                "kind": lim.get("kind"),
+                "percent": lim.get("percent"),           # used, 0-100
+                "resets_at": lim.get("resets_at"),
+                "severity": lim.get("severity"),
+                "model": ((lim.get("scope") or {}).get("model") or {}).get("display_name"),
+            })
+    except Exception:
+        out = None  # keep None so we retry after cache expiry
+    _limits_cache["t"], _limits_cache["data"] = now, out
+    return out
 
 
 def _claude_usage():
@@ -118,11 +169,13 @@ async def stats_pusher(ws: web.WebSocketResponse):
     try:
         while not ws.closed:
             usage = await asyncio.to_thread(_claude_usage)
+            limits = await asyncio.to_thread(_claude_limits)
             await ws.send_str(json.dumps({
                 "type": "stats",
                 "uptime_s": int(time.time() - START_TIME),
                 "execs": EXEC_COUNT,
                 "claude": usage,
+                "limits": limits,
             }))
             await asyncio.sleep(60)
     except (ConnectionResetError, asyncio.CancelledError):
