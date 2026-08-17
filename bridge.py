@@ -220,7 +220,7 @@ async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effo
         print(f"[chat] {len(text)}b → {len(reply)}b", flush=True)
     except Exception as e:
         try:
-            await ws.send_str(json.dumps({"type": "chatreply", "text": f"помилка: {e}"}))
+            await ws.send_str(json.dumps({"type": "chatreply", "text": f"error: {e}"}))
         except Exception:
             pass
     finally:
@@ -244,7 +244,7 @@ async def run_import(ws: web.WebSocketResponse, url: str):
             proc.kill()
             await ws.send_str(json.dumps({"type": "chatreply", "text": "import: timeout 180s"}))
             return
-        tail = (out.decode("utf-8", "replace").strip().splitlines() or ["(порожньо)"])[-1]
+        tail = (out.decode("utf-8", "replace").strip().splitlines() or ["(empty)"])[-1]
         if proc.returncode != 0:
             tail += " | " + err.decode("utf-8", "replace").strip()[-300:]
         await ws.send_str(json.dumps({"type": "chatreply", "text": tail[:1500]}))

@@ -100,7 +100,7 @@ def main():
 
     from playwright.sync_api import sync_playwright
 
-    print(f"[import] відкриваю {args.url}", flush=True)
+    print(f"[import] opening {args.url}", flush=True)
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": args.width, "height": 900})
@@ -130,7 +130,7 @@ def main():
 
     els = data["els"]
     pg = data["page"]
-    print(f"[import] {len(els)} елементів, {len(imgs)} картинок → будую у Figma", flush=True)
+    print(f"[import] {len(els)} elements, {len(imgs)} images → building in Figma", flush=True)
 
     payload = json.dumps({"page": pg, "els": els, "imgs": imgs}, ensure_ascii=False)
     build = """
@@ -190,7 +190,7 @@ for (const e of D.els) {
 function rgbv(css) { const m = css.match(/[\\d.]+/g); return { r: +m[0] / 255, g: +m[1] / 255, b: +m[2] / 255 }; }
 function alp(css) { const m = css.match(/[\\d.]+/g); return m[3] !== undefined ? +m[3] : 1; }
 figma.viewport.scrollAndZoomIntoView([root]);
-figma.notify("Імпортовано: " + made + " шарів. Далі: Clean → ⇥ 🎨 T");
+figma.notify("Imported: " + made + " layers. Next: Clean → ⇥ 🎨 T");
 return { frame: root.id, layers: made, title: D.page.title };
 """
     build = build.replace("%PAYLOAD%", payload)
@@ -202,11 +202,11 @@ return { frame: root.id, layers: made, title: D.page.title };
     with urllib.request.urlopen(req, timeout=130) as r:
         resp = json.loads(r.read())
     if not resp.get("ok"):
-        print(f"[import] ПОМИЛКА: {resp.get('error')}", file=sys.stderr)
+        print(f"[import] ERROR: {resp.get('error')}", file=sys.stderr)
         if resp.get("hint"):
             print(f"   hint: {resp['hint']}", file=sys.stderr)
         sys.exit(1)
-    print(f"[import] готово: {resp.get('result')}", flush=True)
+    print(f"[import] done: {resp.get('result')}", flush=True)
 
 
 if __name__ == "__main__":

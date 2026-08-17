@@ -287,10 +287,10 @@ function fmtReset(iso) {
   if (ms <= 0) return "";
   const m = Math.round(ms / 60000);
   const h = Math.floor(m / 60);
-  if (h >= 48) return "через " + Math.round(h / 24) + "д";
-  return "через " + (h ? h + "год " + (m % 60) + "хв" : m + "хв");
+  if (h >= 48) return "in " + Math.round(h / 24) + "d";
+  return "in " + (h ? h + "h " + (m % 60) + "m" : m + "m");
 }
-const LIM_NAMES = { session: "Сесія", weekly_all: "Тиждень" };
+const LIM_NAMES = { session: "Session", weekly_all: "Weekly" };
 const limNotified = {};
 function renderStats(s) {
   const c = s.claude || {};
@@ -312,7 +312,7 @@ function renderStats(s) {
     if (hot && !limNotified[key]) {
       limNotified[key] = true;
       parent.postMessage({ pluginMessage: { type: "notify",
-        text: "Claude " + (LIM_NAMES[l.kind] || l.model) + ": лишилось " + (100 - l.percent) + "%" } }, "*");
+        text: "Claude " + (LIM_NAMES[l.kind] || l.model) + ": " + (100 - l.percent) + "% left" } }, "*");
     }
   });
   document.getElementById("limits").innerHTML = lims.map(l => {
