@@ -11,13 +11,26 @@
   .pending { background: #fff3cd; color: #856404; }
   #log { background: #f5f5f5; padding: 8px; border-radius: 4px; height: 180px; overflow-y: auto; font-family: monospace; font-size: 11px; white-space: pre-wrap; margin: 0; }
   .muted { color: #777; font-size: 11px; }
+  #toggle { margin-left: auto; border: 1px solid #ddd; background: #fff; border-radius: 4px;
+            width: 22px; height: 22px; line-height: 1; cursor: pointer; color: #555; font-size: 14px; padding: 0; }
+  #toggle:hover { background: #f0f0f0; }
+
+  /* згорнутий режим */
+  body.mini { padding: 0; cursor: pointer; }
+  body.mini .row { margin: 0; height: 40px; padding: 0 10px; gap: 6px; }
+  body.mini #log, body.mini #server, body.mini .label { display: none; }
+  body.mini #status { font-size: 0; width: 9px; height: 9px; padding: 0; border-radius: 50%; flex: none; }
+  body.mini #dot-label { display: inline; font-size: 11px; color: #666; font-family: monospace; }
+  #dot-label { display: none; }
 </style>
 </head>
 <body>
   <div class="row">
-    <span>bridge:</span>
+    <span class="label">bridge:</span>
     <span id="status" class="pending">connecting…</span>
+    <span id="dot-label">figmosha</span>
     <span class="muted" id="server">ws://localhost:8787/plugin</span>
+    <button id="toggle" title="Згорнути / розгорнути">–</button>
   </div>
   <pre id="log">[ui] booting</pre>
 
@@ -89,9 +102,25 @@ function connect() {
   };
 }
 
+// ── згортання ────────────────────────────────────────────────────────────
+let mini = false;
+const toggleEl = document.getElementById("toggle");
+
+function setMini(next, tell) {
+  mini = next;
+  document.body.classList.toggle("mini", mini);
+  toggleEl.textContent = mini ? "+" : "–";
+  if (tell) parent.postMessage({ pluginMessage: { type: "ui", mini } }, "*");
+}
+
+toggleEl.onclick = (e) => { e.stopPropagation(); setMini(!mini, true); };
+// у згорнутому стані клік будь-де розгортає
+document.body.onclick = () => { if (mini) setMini(false, true); };
+
 window.onmessage = (e) => {
   const m = e.data && e.data.pluginMessage;
   if (!m) return;
+  if (m.type === "uistate") { setMini(!!m.mini, false); return; }
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     log(`[drop] ws not open, ${m.type} id=${shortId(m.id)}`);
     return;

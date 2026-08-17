@@ -2,6 +2,8 @@
 
 Drive Figma by sending JS code through a local bridge that's connected to a custom plugin running inside Figma Desktop.
 
+**Per-project design conventions live in `projects/<name>.md`.** Before design work in a Figma file, check `projects/` for a matching md (e.g. file "Coast Flight" → `projects/coast-flight.md`) and read it first. Append dated decisions to its "Історія рішень" section as you make them.
+
 ## How to send code
 
 ```bash
@@ -170,25 +172,23 @@ return root.findAll(n => n.type === "TEXT").map(t => t.characters)
 
 The error response includes a `hint` field for common cases — read it before debugging.
 
-## Where things live (user's setup)
+## Where things live (macOS, актуально)
 
-- Bridge: `~/figmosha2/` on WSL Ubuntu at `192.168.31.105` (passwordless ssh as `user`)
-- Plugin source: `~/figmosha2/plugin/`
-- Plugin Windows-side (for Figma to import): `C:\Users\User\figmosha-plugin\`
-- Tmux session: `figmosha-bridge`
-- Log: `/tmp/figmosha-bridge.log` on WSL
+Усе локально, ніякого WSL і синхронізації.
 
-To restart bridge from this dev machine:
+- Bridge + плагін: `~/Code/figmosha2/`
+- Figma Desktop вантажить плагін **напряму з репозиторію** — `~/Code/figmosha2/plugin/` (перевірено в `~/Library/Application Support/Figma/settings.json`). Правки в `code.js` / `ui.html` підхоплюються після **Run**, копіювати нікуди не треба. Re-Import потрібен лише при зміні `manifest.json`.
+- Venv: `~/Code/figmosha2/venv/` (arm64, Python 3.12)
+- Log: `/tmp/figmosha-bridge.log`
 
-```bash
-ssh user@192.168.31.105 'bash ~/figmosha2/start-bridge.sh'
-```
-
-When you edit `plugin/code.js` or `plugin/manifest.json` here, sync to user's Windows copy and ask them to re-Run (or re-Import if manifest changed):
+`tmux` на цій машині немає, тож `start-bridge.sh` не працює як є. Запуск:
 
 ```bash
-rsync -azc -e "ssh -o UserKnownHostsFile=/tmp/khosts" \
-  plugin/code.js plugin/ui.html plugin/manifest.json \
-  user@192.168.31.105:figmosha-plugin-staging/
-ssh user@192.168.31.105 'cp ~/figmosha-plugin-staging/* /mnt/c/Users/User/figmosha-plugin/'
+cd ~/Code/figmosha2 && nohup ./venv/bin/python bridge.py > /tmp/figmosha-bridge.log 2>&1 &
 ```
+
+`nohup` обов'язковий — інакше bridge помирає разом із сесією агента. Перевірка: `curl -s http://localhost:8787/status`.
+
+## UI плагіна
+
+Вікно згортається в компактний бар (кнопка `–` у правому куті, клік по бару розгортає назад). Стан зберігається у `figma.clientStorage` під ключем `figmosha:mini` і переживає перезапуск. Розміри — у константі `UI_SIZE` в `code.js`.

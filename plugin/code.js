@@ -1,4 +1,16 @@
-figma.showUI(__html__, { width: 360, height: 260, title: "Figmosha Bridge" });
+const UI_SIZE = { open: { w: 360, h: 260 }, mini: { w: 148, h: 40 } };
+figma.showUI(__html__, { width: UI_SIZE.open.w, height: UI_SIZE.open.h, title: "Figmosha Bridge" });
+
+// відновити згорнутий стан з минулого запуску
+(async () => {
+  try {
+    const mini = await figma.clientStorage.getAsync("figmosha:mini");
+    if (mini) {
+      figma.ui.resize(UI_SIZE.mini.w, UI_SIZE.mini.h);
+      figma.ui.postMessage({ type: "uistate", mini: true });
+    }
+  } catch (e) {}
+})();
 
 function safeStringify(value) {
   if (value === undefined) return null;
@@ -154,6 +166,12 @@ const HELPERS = {
 // ──────────────────────────────────────────────────────────────────────────
 
 figma.ui.onmessage = async (msg) => {
+  if (msg.type === "ui") {
+    const s = msg.mini ? UI_SIZE.mini : UI_SIZE.open;
+    figma.ui.resize(s.w, s.h);
+    try { await figma.clientStorage.setAsync("figmosha:mini", !!msg.mini); } catch (e) {}
+    return;
+  }
   if (msg.type !== "exec") return;
   const { id, code } = msg;
 
