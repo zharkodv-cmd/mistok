@@ -46,7 +46,7 @@ When the user asks to fill frames/sections with images — search & download REA
 
 ## Section redesign (plugin ⟳ button)
 
-The button writes `/tmp/mistok-redesign-request.json` (section spec + instruction). When the user says «редизайнь секцію»: read it; browse awwwards.com Sites of the Day / Honorable Mentions via Playwright; pick 2–3 sections similar in meaning and capture reference screenshots; redraw the section NEXT TO the original using the file's variables (respect scopes), text styles and existing assets, 1–2 variants; references are inspiration, not a copy; delete the request file when done.
+The button writes `/tmp/mistok-redesign-request.json` (section spec + instruction). When the user says «редизайнь секцію»: read it; browse awwwards.com Sites of the Day / Honorable Mentions via Playwright; pick 2–3 sections similar in meaning and capture reference screenshots; redraw the section NEXT TO the original using the file's variables (respect scopes), text styles and existing assets, 1–2 variants; references are inspiration, not a copy. Placement — ALWAYS next to the source: same parent/page, `x = source.x + source.width + 100`, `y = source.y` (fetch coords and parent via `mistok exec` using the request's frame id). Delete the request file when done.
 
 ## Прототип (кнопка ▭ у плагіні)
 
@@ -54,7 +54,7 @@ The button writes `/tmp/mistok-redesign-request.json` (section spec + instructio
 
 ## Recreate (◆ Design button)
 
-Writes `/tmp/mistok-design-request.json`. On «recreate the design»: the source is a screenshot (frame with an IMAGE fill). mistok shot it at scale 1–2 and read carefully; rebuild NEXT TO it as 1:1 editable layers: exact geometry, colors sampled from the image (bind to variables only on exact/near match), real TEXT nodes with matching size/weight/line-height (project fonts or Inter), fills/borders/radii/shadows as seen. Finish with a side-by-side shot comparison and fix deltas. Delete the request file.
+Writes `/tmp/mistok-design-request.json`. On «recreate the design»: the source is a screenshot (frame with an IMAGE fill). mistok shot it at scale 1–2 and read carefully; rebuild NEXT TO it as 1:1 editable layers: exact geometry, colors sampled from the image (bind to variables only on exact/near match), real TEXT nodes with matching size/weight/line-height (project fonts or Inter), fills/borders/radii/shadows as seen. Finish with a side-by-side shot comparison and fix deltas. Placement — ALWAYS next to the source: same parent/page, `x = source.x + source.width + 100`, `y = source.y` (fetch coords and parent via `mistok exec` using the request's frame id). Delete the request file.
 
 ## Redesign — addendum
 
