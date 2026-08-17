@@ -463,7 +463,8 @@ async def run_protocol(phrase: str, label: str, timeout_s: int = 900):
             return
         await send_plugin({"type": "chatstatus", "text": label + " (headless, up to ~15 min)…"})
         proc = await asyncio.create_subprocess_exec(
-            claude, "-p", phrase + ". Reply with ONE short summary line when done.",
+            claude, "-p", phrase + ". When finished, reply with ONLY a one-line report of what was done: "
+                    "what you built/changed, where it is placed (frame name), and key counts. No process narration.",
             "--model", "sonnet", "--dangerously-skip-permissions",
             cwd=str(Path.home() / "Code" / "mistok"), env=env,
             stdin=asyncio.subprocess.DEVNULL,
@@ -476,10 +477,10 @@ async def run_protocol(phrase: str, label: str, timeout_s: int = 900):
             await send_plugin({"type": "chatreply", "text": label + ": timeout"})
             return
         text = out.decode("utf-8", "replace").strip()
-        tail = text.splitlines()[-1] if text else "(empty)"
+        report = text if text else "(empty)"
         if proc.returncode != 0:
-            tail += " | " + err.decode("utf-8", "replace").strip()[-200:]
-        await send_plugin({"type": "chatreply", "text": tail[:1500]})
+            report += " | " + err.decode("utf-8", "replace").strip()[-200:]
+        await send_plugin({"type": "chatreply", "text": report[:400]})
         print(f"[proto-run] done: {label} rc={proc.returncode}", flush=True)
     except Exception as e:
         print(f"[proto-run] failed: {e}", flush=True)
