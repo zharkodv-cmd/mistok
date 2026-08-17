@@ -45,20 +45,6 @@
     display: grid; place-items: center;
   }
   #toggle:hover { background: var(--panel); color: var(--text); }
-  #log {
-    background: var(--panel); border: 1px solid var(--border);
-    padding: 6px 8px; border-radius: 6px;
-    flex: 1; min-height: 56px; overflow-y: auto;
-    font-family: ui-monospace, "SF Mono", monospace; font-size: 10px;
-    line-height: 1.5; margin: 0; white-space: pre-wrap; word-break: break-all;
-  }
-  #log .t { color: var(--dim); }
-  #log .ok { color: var(--ok); }
-  #log .err { color: var(--err); }
-  #log .exec { color: var(--accent); }
-  #log .mut { color: var(--pend); }
-  #log .ws { color: var(--muted); }
-  #log div { min-height: 1em; }
 
   #stats {
     font-family: ui-monospace, monospace; font-size: 10px; color: var(--muted);
@@ -116,7 +102,7 @@
   body.mini { padding: 0; cursor: pointer; display: block; }
   body.mini .row { margin: 0; height: 36px; padding: 0 10px; gap: 6px; }
   body.mini:hover { background: var(--panel); }
-  body.mini #log, body.mini #server, body.mini #status, body.mini #count,
+  body.mini #server, body.mini #status, body.mini #count,
   body.mini #stats, body.mini #summary, body.mini #limits, body.mini #sel,
   body.mini #ops { display: none; }
   body.mini #brand { display: inline; color: var(--muted); }
@@ -135,42 +121,18 @@
   <div id="ops"></div>
   <div id="stats">очікую статистику…</div>
   <div id="summary"></div>
-  <pre id="log"></pre>
 
 <script>
 const SERVER = "ws://localhost:8787/plugin";
 const dotEl = document.getElementById("dot");
 const statusEl = document.getElementById("status");
 const countEl = document.getElementById("count");
-const logEl = document.getElementById("log");
 let ws = null;
 let reconnectTimer = null;
 let execCount = 0;
-const recentLog = [];
 
-function classify(line) {
-  if (line.startsWith("[ok]")) return "ok";
-  if (line.startsWith("[err]") || line.startsWith("[drop]") || line.startsWith("[send]")) return "err";
-  if (line.startsWith("[exec✎]")) return "mut";
-  if (line.startsWith("[exec]")) return "exec";
-  if (line.startsWith("[shot]")) return "ok";
-  return "ws";
-}
 
-// груба евристика: чи виглядає код як мутація файлу
-const MUT_RE = /\b(create[A-Z]\w*\(|\.remove\(\)|setProperties|appendChild|insertChild|\.(fills|strokes|characters)\s*=|\bresize\(|setBoundVariable|cloneNext|setText)/;
-
-function log(line) {
-  const ts = new Date().toTimeString().slice(0, 8);
-  recentLog.push({ ts, line });
-  if (recentLog.length > 80) recentLog.shift();
-  logEl.innerHTML = recentLog.map(({ ts, line }) => {
-    const cls = classify(line);
-    const esc = line.replace(/&/g, "&amp;").replace(/</g, "&lt;");
-    return `<div><span class="t">${ts}</span> <span class="${cls}">${esc}</span></div>`;
-  }).join("");
-  logEl.scrollTop = logEl.scrollHeight;
-}
+function log(_line) {} // лог-панель прибрано; події видно через статус-дот і figma.notify
 
 function setStatus(text, cls) {
   statusEl.textContent = text;
@@ -276,8 +238,6 @@ function connect() {
     }
     if (msg.type === "exec") {
       setCount(++execCount);
-      const tag = MUT_RE.test(msg.code || "") ? "[exec✎]" : "[exec]";
-      log(`${tag} ${shortId(msg.id)} code=${(msg.code || "").length}b`);
       parent.postMessage({ pluginMessage: { type: "exec", id: msg.id, code: msg.code } }, "*");
     } else if (msg.type === "stats") {
       renderStats(msg);
