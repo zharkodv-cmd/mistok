@@ -361,6 +361,7 @@ function connect() {
       endTask("chat");
       endTask("bg:spell");
       endTask("bg:al");
+      endTask("bg:proto");
       chatShow(msg.text, false);
     } else if (msg.type === "ping") {
       try { ws.send(JSON.stringify({ type: "pong" })); } catch (e) {}
@@ -634,6 +635,9 @@ window.onmessage = (e) => {
     // фонова вичитка триває після opreport — тримаємо лоадер до chatreply
     if (m.kind === "spell" && !m.error) startTask("bg:spell", "spellchecking (Claude)…");
     if (m.kind === "autolayout" && !m.error) startTask("bg:al", "auto-layout planning (Claude)…");
+    if (m.kind === "recreate" && !m.error) startTask("bg:proto", "recreating design (Claude)…");
+    if (m.kind === "redesign" && !m.error) startTask("bg:proto", "redesigning (Claude)…");
+    if (m.kind === "prototype" && !m.error) startTask("bg:proto", "building prototype (Claude)…");
   }
   else if (m.type === "log") {/* skip — would spam */}
 };

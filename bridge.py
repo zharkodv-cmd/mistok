@@ -449,6 +449,42 @@ async def run_alplan(request: dict):
         print(f"[alplan] failed: {e}", flush=True)
 
 
+
+async def run_protocol(phrase: str, label: str, timeout_s: int = 900):
+    """Одразу виконати протокол headless-сесією (cwd=mistok → CLAUDE.md з протоколами)."""
+    print(f"[proto-run] start: {label}", flush=True)
+    try:
+        import shutil
+        env = dict(os.environ)
+        env["PATH"] = env.get("PATH", "") + f":{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+        claude = shutil.which("claude", path=env["PATH"])
+        if not claude:
+            await send_plugin({"type": "chatreply", "text": label + ": claude CLI not found"})
+            return
+        await send_plugin({"type": "chatstatus", "text": label + " (headless, up to ~15 min)…"})
+        proc = await asyncio.create_subprocess_exec(
+            claude, "-p", phrase + ". Reply with ONE short summary line when done.",
+            "--model", "sonnet", "--dangerously-skip-permissions",
+            cwd=str(Path.home() / "Code" / "mistok"), env=env,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await send_plugin({"type": "chatreply", "text": label + ": timeout"})
+            return
+        text = out.decode("utf-8", "replace").strip()
+        tail = text.splitlines()[-1] if text else "(empty)"
+        if proc.returncode != 0:
+            tail += " | " + err.decode("utf-8", "replace").strip()[-200:]
+        await send_plugin({"type": "chatreply", "text": tail[:1500]})
+        print(f"[proto-run] done: {label} rc={proc.returncode}", flush=True)
+    except Exception as e:
+        print(f"[proto-run] failed: {e}", flush=True)
+
+
 async def stats_pusher(ws: web.WebSocketResponse):
     """Push usage stats to the plugin UI every 60s while it's connected."""
     try:
@@ -574,8 +610,7 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                     with open("/tmp/mistok-design-request.json", "w", encoding="utf-8") as f:
                         json.dump(req, f, ensure_ascii=False, indent=1)
                     print(f"[design] request: {req.get('frame', {}).get('name')} → /tmp/mistok-design-request.json", flush=True)
-                    await send_plugin({"type": "chatreply",
-                        "text": "◆ Recreate request for \"" + str(req.get('frame', {}).get('name')) + "\" is ready.\nTell Claude in a session: recreate the design"})
+                    asyncio.create_task(run_protocol("recreate the design", "◆ recreating"))
                 except OSError as e:
                     print(f"[design] failed: {e}", flush=True)
                 continue
