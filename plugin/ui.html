@@ -8,7 +8,6 @@
     --text: #e6e6ea; --muted: #8a8a93; --dim: #7f7f89;
     --ok: #4ade80; --err: #f87171; --pend: #fbbf24; --accent: #7dd3fc;
   }
-  html, body { height: 100%; }
   body {
     font-family: "Inter", system-ui, -apple-system, sans-serif;
     margin: 0; padding: 8px; font-size: 11px;
@@ -57,14 +56,15 @@
   }
   #summary:empty, #limits:empty, #sel:empty, #ops:empty { display: none; }
 
-  #ops { display: flex; gap: 4px; flex: none; }
+  #ops { display: flex; gap: 5px; flex: none; }
   #ops:empty { display: none; }
   #ops button {
-    flex: 1; border: 1px solid var(--border); background: var(--panel);
-    border-radius: 4px; color: var(--muted); cursor: pointer;
-    padding: 3px 0; font-size: 10px;
+    flex: 1; height: 30px; border: 1px solid var(--border); background: var(--panel);
+    border-radius: 6px; color: var(--muted); cursor: pointer; padding: 0;
+    display: grid; place-items: center; font-size: 13px;
   }
-  #ops button:hover { background: var(--bg); color: var(--text); }
+  #ops button:hover { background: var(--bg); color: var(--text); border-color: #3c3c44; }
+  #ops button svg, #sel button svg { display: block; }
 
   #sel {
     display: flex; align-items: center; gap: 6px; flex: none;
@@ -76,9 +76,9 @@
   #sel .selname { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #sel .selmeta { color: var(--muted); font-size: 10px; flex: none; }
   #sel button {
-    flex: none; border: 1px solid var(--border); background: transparent;
-    border-radius: 4px; color: var(--muted); cursor: pointer;
-    padding: 1px 6px; line-height: 1.4;
+    flex: none; width: 26px; height: 24px; border: 1px solid var(--border);
+    background: transparent; border-radius: 4px; color: var(--muted); cursor: pointer;
+    padding: 0; display: grid; place-items: center; font-size: 12px;
   }
   #sel button:first-of-type { margin-left: auto; }
   #sel button:hover { background: var(--bg); color: var(--text); }
@@ -211,6 +211,7 @@ function renderStats(s) {
       '<span class="lmeta">' + left + "% left · " + fmtReset(l.resets_at) + "</span></div>" +
       '<div class="track"><div class="fill ' + cls + '" style="width:' + left + '%"></div></div></div>';
   }).join("");
+  fitHeight();
 }
 
 function connect() {
@@ -270,27 +271,39 @@ function copyText(t) {
   try { document.execCommand("copy"); } catch (e) {}
   ta.remove();
 }
-function flash(btn, glyph, revert) {
-  btn.textContent = glyph;
-  setTimeout(() => { btn.textContent = revert; }, 900);
+function flash(btn, glyphHTML, revertHTML) {
+  btn.innerHTML = glyphHTML;
+  setTimeout(() => { btn.innerHTML = revertHTML; }, 900);
 }
+const I = (paths) =>
+  '<svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
+  'stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">' + paths + "</svg>";
+const ICONS = {
+  clean: I('<path d="M12.5 2.5L7 8"/><path d="M6.2 8.8l-2.9 3.4c-.5.6-.3 1.3.4 1.5l1.6.4c1.9.4 3.4-.4 4-2.2l.6-1.7-3.7-1.4z" fill="currentColor" stroke="none"/><path d="M13.5 5.5h-2M12.8 7.8l-1.4-.7"/>'),
+  rename: I('<path d="M10.8 2.7l2.5 2.5L5.5 13H3v-2.5l7.8-7.8z"/><path d="M9.3 4.2l2.5 2.5"/>'),
+  varsal: I('<path d="M2.5 3v10M13.5 3v10"/><path d="M5.3 8h5.4M6.8 6.3L5.3 8l1.5 1.7M9.2 6.3L10.7 8l-1.5 1.7"/>'),
+  varscolor: I('<path d="M8 2.2S4.2 6.8 4.2 9.4a3.8 3.8 0 007.6 0C11.8 6.8 8 2.2 8 2.2z"/><path d="M6.3 9.8a1.7 1.7 0 001.5 1.6"/>'),
+  copy: I('<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 00-1.5-1.5H4A1.5 1.5 0 002.5 3v5A1.5 1.5 0 004 9.5h.5"/>'),
+  shot: I('<path d="M2.5 5.8A1.3 1.3 0 013.8 4.5h1.4l1-1.5h3.6l1 1.5h1.4a1.3 1.3 0 011.3 1.3v6.4a1.3 1.3 0 01-1.3 1.3H3.8a1.3 1.3 0 01-1.3-1.3V5.8z"/><circle cx="8" cy="8.8" r="2.3"/>'),
+  ok: '<span style="color:var(--ok)">✓</span>',
+  wait: "⏳",
+};
 const OP_BTNS = [
-  { kind: "clean", label: "🧹 Clean", title: "Цілі px + відступи/гапи → найближчі variables" },
-  { kind: "rename", label: "✏️ Rename", title: "Перейменувати дефолтні Frame N за вмістом, розгрупувати Group N" },
-  { kind: "varsal", label: "⇥ AL", title: "Auto-layout відступи/гапи → найближчі variables" },
-  { kind: "varscolor", label: "🎨 Colors", title: "Кольори/текст → найближчі variables" },
+  { kind: "clean", title: "Clean: цілі px + відступи/гапи → найближчі variables" },
+  { kind: "rename", title: "Rename: дефолтні Frame N за вмістом, розгрупувати Group N" },
+  { kind: "varsal", title: "Auto-layout відступи/гапи → найближчі variables" },
+  { kind: "varscolor", title: "Кольори/текст → найближчі variables" },
 ];
 function renderOps(show) {
   const el = document.getElementById("ops");
   if (!show) { el.innerHTML = ""; return; }
   el.innerHTML = OP_BTNS.map((b) =>
-    '<button data-kind="' + b.kind + '" title="' + b.title + '">' + b.label + "</button>").join("");
+    '<button data-kind="' + b.kind + '" title="' + b.title + '">' + ICONS[b.kind] + "</button>").join("");
   el.querySelectorAll("button").forEach((btn) => {
     btn.onclick = (e) => {
       e.stopPropagation();
       parent.postMessage({ pluginMessage: { type: "op", kind: btn.dataset.kind } }, "*");
-      const orig = btn.textContent;
-      flash(btn, "⏳", orig);
+      flash(btn, ICONS.wait, ICONS[btn.dataset.kind]);
     };
   });
 }
@@ -298,25 +311,28 @@ function renderOps(show) {
 function renderSel(m) {
   const el = document.getElementById("sel");
   renderOps(m.nodes && m.nodes.length);
-  if (!m.nodes || !m.nodes.length) { el.innerHTML = ""; return; }
+  if (!m.nodes || !m.nodes.length) { el.innerHTML = ""; fitHeight(); return; }
   const n = m.nodes[0];
   const more = m.total > 1 ? " +" + (m.total - 1) : "";
   el.innerHTML =
     '<span class="selid">' + escHtml(n.id) + "</span>" +
     '<span class="selname">' + escHtml(n.name) + "</span>" +
     '<span class="selmeta">' + n.w + "×" + n.h + more + "</span>" +
-    '<button id="copySel" title="Copy node id">⧉ id</button>' +
-    '<button id="shotSel" title="PNG @2x → буфер + Desktop/mistok-shots">📷</button>';
-  document.getElementById("copySel").onclick = (e) => {
+    '<button id="copySel" title="Copy node id">' + ICONS.copy + "</button>" +
+    '<button id="shotSel" title="PNG @2x → буфер + Desktop/mistok-shots">' + ICONS.shot + "</button>";
+  const copyBtn = document.getElementById("copySel");
+  copyBtn.onclick = (e) => {
     e.stopPropagation();
     copyText(m.nodes.map((x) => x.id).join(","));
-    flash(e.target, "✓", "⧉ id");
+    flash(copyBtn, ICONS.ok, ICONS.copy);
   };
-  document.getElementById("shotSel").onclick = (e) => {
+  const shotBtn = document.getElementById("shotSel");
+  shotBtn.onclick = (e) => {
     e.stopPropagation();
     parent.postMessage({ pluginMessage: { type: "shotsel" } }, "*");
-    flash(e.target, "⏳", "📷");
+    flash(shotBtn, ICONS.wait, ICONS.shot);
   };
+  fitHeight();
 }
 
 // ── згортання ────────────────────────────────────────────────────────────
@@ -328,6 +344,15 @@ function setMini(next, tell) {
   document.body.classList.toggle("mini", mini);
   toggleEl.textContent = mini ? "+" : "–";
   if (tell) parent.postMessage({ pluginMessage: { type: "ui", mini } }, "*");
+  if (!mini) fitHeight();
+}
+
+// авто-висота: вікно підганяється під контент
+function fitHeight() {
+  if (mini) return;
+  requestAnimationFrame(() => {
+    parent.postMessage({ pluginMessage: { type: "resize", h: document.body.scrollHeight } }, "*");
+  });
 }
 
 toggleEl.onclick = (e) => { e.stopPropagation(); setMini(!mini, true); };
@@ -356,6 +381,7 @@ window.onmessage = (e) => {
 
 log("[ui] booting");
 connect();
+fitHeight();
 </script>
 </body>
 </html>
