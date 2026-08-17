@@ -270,7 +270,9 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                 name = os.path.basename(m.get("name") or "export.png")
                 try:
                     data = base64.b64decode(m.get("b64") or "")
-                    out = Path.home() / "Desktop" / name
+                    shots_dir = Path.home() / "Desktop" / "mistok-shots"
+                    shots_dir.mkdir(exist_ok=True)
+                    out = shots_dir / name
                     out.write_bytes(data)
                     print(f"[file] saved {out} ({len(data)} bytes)", flush=True)
                 except Exception as e:

@@ -311,7 +311,7 @@ function renderSel(m) {
     '<span class="selname">' + escHtml(n.name) + "</span>" +
     '<span class="selmeta">' + n.w + "×" + n.h + more + "</span>" +
     '<button id="copySel" title="Copy node id">⧉ id</button>' +
-    '<button id="shotSel" title="PNG @2x → Desktop">📷</button>';
+    '<button id="shotSel" title="PNG @2x → Desktop/mistok-shots">📷</button>';
   document.getElementById("copySel").onclick = (e) => {
     e.stopPropagation();
     copyText(m.nodes.map((x) => x.id).join(","));
@@ -339,7 +339,7 @@ window.onmessage = (e) => {
   }
   if (m.type === "result") log(`[ok]  ${shortId(m.id)}`);
   else if (m.type === "error") log(`[err] ${shortId(m.id)} ${m.text}`);
-  else if (m.type === "file") log(`[shot] ${m.name} → Desktop`);
+  else if (m.type === "file") log(`[shot] ${m.name} → Desktop/mistok-shots`);
   else if (m.type === "log") {/* skip — would spam */}
 };
 

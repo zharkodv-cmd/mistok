@@ -302,7 +302,7 @@ figma.ui.onmessage = async (msg) => {
       const bytes = await n.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 } });
       const name = (n.name || "node").replace(/[^\wЀ-ӿ-]+/g, "-").slice(0, 40) + ".png";
       figma.ui.postMessage({ type: "file", name, b64: figma.base64Encode(bytes) });
-      figma.notify("PNG → Desktop: " + name);
+      figma.notify("PNG → mistok-shots: " + name);
     } catch (e) {
       figma.notify("Експорт не вдався: " + ((e && e.message) || e));
     }
