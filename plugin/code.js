@@ -159,9 +159,9 @@ async function opVarsColor(roots, res) {
 }
 
 async function opClean(roots, res) {
-  await opRename(roots, res); // Clean включає Rename: імена + розгрупування
+  await opRename(roots, res); // 1. імена + розгрупування
   for (const n of walkAll(roots)) {
-    // піксельна сітка: цілі координати й розміри
+    // 2. піксельна сітка: цілі координати й розміри
     if (typeof n.x === "number" && (n.x % 1 || n.y % 1)) {
       n.x = Math.round(n.x); n.y = Math.round(n.y);
       res.changes.push(n.name + ": x/y → ціле");
@@ -172,11 +172,13 @@ async function opClean(roots, res) {
       catch (e) {}
     }
   }
-  await opVarsAL(roots, res); // відступи/гапи → variables (250 тощо)
+  try { await opAutoLayout(roots, res); } catch (e) {} // 3. логічний auto-layout (нема кандидатів — ок)
+  await opVarsAL(roots, res); // 4. відступи/гапи → variables (скоуп GAP)
 }
 
 async function opRename(roots, res) {
-  const DEFAULT_RE = /^(Frame|Group|Rectangle|Ellipse|Polygon|Star|Line|Arrow|Vector|Section)( \d+)?$/;
+  // дефолтні імена: "Frame 12", "frame13123132312", "Group", "union 3", …
+  const DEFAULT_RE = /^(frame|group|rectangle|ellipse|polygon|star|line|arrow|vector|section|union|subtract|intersect|exclude)\s*\d*$/i;
   // розгрупування: GROUP з дефолтною назвою, найглибші перші (ungroup зберігає дітей)
   const groups = [];
   for (const n of walkAll(roots)) {
@@ -205,17 +207,22 @@ async function opRename(roots, res) {
   for (const n of walkAll(roots)) {
     if (itemNamed.has(n.id) || !DEFAULT_RE.test(n.name)) continue;
     const parent = n.parent;
+    const maxDim = typeof n.width === "number" ? Math.max(n.width, n.height) : 0;
+    const hasImg = Array.isArray(n.fills) && n.fills.some((p) => p && p.type === "IMAGE");
     let name = null;
     if (parent && typeof parent.width === "number" && typeof n.width === "number" &&
-        n.width * n.height >= parent.width * parent.height * 0.85) name = "bg";
-    else if (Array.isArray(n.fills) && n.fills.some((p) => p && p.type === "IMAGE")) name = "image";
+        n.width * n.height >= parent.width * parent.height * 0.6) name = "bg";
+    else if (hasImg) name = n.type === "ELLIPSE" ? "avatar" : "image";
     else {
       const t = n.findOne && n.findOne((c) => c.type === "TEXT" && c.characters.trim());
       if (t) name = t.characters.trim().slice(0, 24);
       else if (n.layoutMode === "HORIZONTAL") name = "row";
       else if (n.layoutMode === "VERTICAL") name = "col";
-      else if (n.type === "ELLIPSE") name = "circle";
-      else if (n.type === "RECTANGLE") name = "box";
+      else if (n.type === "LINE" || (typeof n.height === "number" && n.height <= 4 && n.width >= 40)) name = "divider";
+      else if (n.type === "ELLIPSE") name = maxDim <= 16 ? "dot" : "circle";
+      else if (n.type === "VECTOR" || n.type === "STAR" || n.type === "POLYGON" ||
+               n.type === "BOOLEAN_OPERATION") name = maxDim <= 48 ? "icon" : "vector";
+      else if (n.type === "RECTANGLE") name = "bg";
     }
     if (name && name !== n.name) { res.changes.push(n.name + " → " + name); n.name = name; }
   }
