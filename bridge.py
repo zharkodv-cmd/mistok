@@ -171,12 +171,18 @@ def _claude_usage():
 
 CHAT_BUSY = False
 
+async def send_plugin(payload: dict):
+    """Надіслати в АКТУАЛЬНЕ з'єднання плагіна (плагін міг перепідключитись)."""
+    ws = PLUGIN_WS
+    if ws is not None and not ws.closed:
+        await ws.send_str(json.dumps(payload))
+
 
 async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effort: str = None):
     """Headless Claude Code turn triggered from the plugin's chat input."""
     global CHAT_BUSY
     if CHAT_BUSY:
-        await ws.send_str(json.dumps({"type": "chatreply", "text": "⏳ previous request still running"}))
+        await send_plugin({"type": "chatreply", "text": "⏳ previous request still running"})
         return
     CHAT_BUSY = True
     try:
@@ -185,7 +191,7 @@ async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effo
         env["PATH"] = env.get("PATH", "") + f":{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin"
         claude = shutil.which("claude", path=env["PATH"])
         if not claude:
-            await ws.send_str(json.dumps({"type": "chatreply", "text": "claude CLI not found in PATH"}))
+            await send_plugin({"type": "chatreply", "text": "claude CLI not found in PATH"})
             return
         opts = []
         if model:
@@ -193,8 +199,8 @@ async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effo
         if effort:
             opts += ["--effort", effort]
         label = " · ".join(filter(None, [model, effort]))
-        await ws.send_str(json.dumps({"type": "chatstatus",
-                                      "text": "thinking…" + (f" ({label})" if label else "")}))
+        await send_plugin({"type": "chatstatus",
+                                      "text": "thinking…" + (f" ({label})" if label else "")})
         cwd = str(Path.home() / "Code" / "mistok")
 
         async def attempt(extra):
@@ -216,15 +222,21 @@ async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effo
         if out is None and err != "timeout 300s":
             out, err = await attempt([])  # перша розмова в цьому cwd — без --continue
         reply = out or f"(empty reply{': ' + err[:300] if err else ''})"
-        await ws.send_str(json.dumps({"type": "chatreply", "text": reply[:6000]}))
+        await send_plugin({"type": "chatreply", "text": reply[:6000]})
         print(f"[chat] {len(text)}b → {len(reply)}b", flush=True)
     except Exception as e:
         try:
-            await ws.send_str(json.dumps({"type": "chatreply", "text": f"error: {e}"}))
+            await send_plugin({"type": "chatreply", "text": f"error: {e}"})
         except Exception:
             pass
     finally:
         CHAT_BUSY = False
+
+async def send_plugin(payload: dict):
+    """Надіслати в АКТУАЛЬНЕ з'єднання плагіна (плагін міг перепідключитись)."""
+    ws = PLUGIN_WS
+    if ws is not None and not ws.closed:
+        await ws.send_str(json.dumps(payload))
 
 
 async def run_import(ws: web.WebSocketResponse, url: str):
@@ -232,7 +244,7 @@ async def run_import(ws: web.WebSocketResponse, url: str):
     try:
         home = Path.home() / "Code" / "mistok"
         py = str(home / "venv" / "bin" / "python")
-        await ws.send_str(json.dumps({"type": "chatstatus", "text": "importing " + url + " …"}))
+        await send_plugin({"type": "chatstatus", "text": "importing " + url + " …"})
         proc = await asyncio.create_subprocess_exec(
             py, str(home / "webimport.py"), url, cwd=str(home),
             stdin=asyncio.subprocess.DEVNULL,
@@ -242,12 +254,12 @@ async def run_import(ws: web.WebSocketResponse, url: str):
             out, err = await asyncio.wait_for(proc.communicate(), timeout=180)
         except asyncio.TimeoutError:
             proc.kill()
-            await ws.send_str(json.dumps({"type": "chatreply", "text": "import: timeout 180s"}))
+            await send_plugin({"type": "chatreply", "text": "import: timeout 180s"})
             return
         tail = (out.decode("utf-8", "replace").strip().splitlines() or ["(empty)"])[-1]
         if proc.returncode != 0:
             tail += " | " + err.decode("utf-8", "replace").strip()[-300:]
-        await ws.send_str(json.dumps({"type": "chatreply", "text": tail[:1500]}))
+        await send_plugin({"type": "chatreply", "text": tail[:1500]})
         print(f"[import] {url} → rc={proc.returncode}", flush=True)
     except Exception as e:
         print(f"[import] failed: {e}", flush=True)
@@ -283,7 +295,7 @@ async def run_spell(ws: web.WebSocketResponse, texts: list):
         except asyncio.TimeoutError:
             proc.kill()
             print("[spell] TIMEOUT 240s", flush=True)
-            await ws.send_str(json.dumps({"type": "chatreply", "text": "Spellcheck: timeout"}))
+            await send_plugin({"type": "chatreply", "text": "Spellcheck: timeout"})
             return
         raw = out.decode("utf-8", "replace")
         print(f"[spell] claude done, {len(raw)}b out", flush=True)
@@ -296,7 +308,7 @@ async def run_spell(ws: web.WebSocketResponse, texts: list):
             except json.JSONDecodeError:
                 pass
         if not fixes:
-            await ws.send_str(json.dumps({"type": "chatreply", "text": "Spellcheck: no errors found ✓"}))
+            await send_plugin({"type": "chatreply", "text": "Spellcheck: no errors found ✓"})
             print("[spell] no fixes", flush=True)
             return
         code = (
@@ -315,8 +327,8 @@ async def run_spell(ws: web.WebSocketResponse, texts: list):
         req = await asyncio.to_thread(
             urllib_request_json, "http://127.0.0.1:8787/exec", {"code": code, "timeout": 60})
         n_ok = (req.get("value") or {}).get("ok", 0)
-        await ws.send_str(json.dumps({"type": "chatreply",
-                                      "text": f"Spellcheck: {n_ok} of {len(fixes)} fixes applied"}))
+        await send_plugin({"type": "chatreply",
+                                      "text": f"Spellcheck: {n_ok} of {len(fixes)} fixes applied"})
         print(f"[spell] applied {n_ok}/{len(fixes)}", flush=True)
     except Exception as e:
         print(f"[spell] failed: {e}", flush=True)

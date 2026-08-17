@@ -600,6 +600,7 @@ async function opGrid(roots, res) {
       }
       return Math.round(best);
     };
+    if (root.type === "INSTANCE") { res.skipped.push(root.name + " (instance internals are locked)"); continue; }
     for (const n of root.children) {
       if (typeof n.x !== "number") continue;
       const hx = n.x + shift;                 // x у координатах host
@@ -607,9 +608,11 @@ async function opGrid(roots, res) {
       const nw = typeof n.resize === "function" && n.type !== "TEXT" ? snapW(n.width) : null;
       const moved = Math.abs(nx - n.x) > 0.5;
       const sized = nw !== null && Math.abs(nw - n.width) > 0.5;
-      if (moved) n.x = nx;
-      if (sized) { try { n.resize(nw, n.height); } catch (e) {} }
-      if (moved || sized) res.changes.push(n.name + " → x:" + Math.round(nx + shift) + (sized ? " w:" + nw : ""));
+      try {
+        if (moved) n.x = nx;
+        if (sized) n.resize(nw, n.height);
+        if (moved || sized) res.changes.push(n.name + " → x:" + Math.round(nx + shift) + (sized ? " w:" + nw : ""));
+      } catch (e) { res.skipped.push(n.name + " (locked)"); }
     }
   }
   if (!res.changes.length && !res.skipped.length) res.skipped.push("nothing to align");
