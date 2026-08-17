@@ -463,10 +463,9 @@ async def run_protocol(phrase: str, label: str, timeout_s: int = 900):
             return
         await send_plugin({"type": "chatstatus", "text": label + " (headless, up to ~15 min)…"})
         proc = await asyncio.create_subprocess_exec(
-            claude, "-p", phrase + ". When finished, reply with ONLY a one-line report of what was done: "
-                    "what you built/changed, where it is placed (frame name), and key counts. No process narration.",
+            claude, "-p", phrase,
             "--model", "sonnet", "--dangerously-skip-permissions",
-            cwd=str(Path.home() / "Code" / "mistok"), env=env,
+            cwd=str(Path.home() / "Code" / "mistok" / "headless"), env=env,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )

@@ -61,38 +61,6 @@ The plugin runtime exposes a small helper namespace. Use these to keep scripts s
 
 **Use them.** Compared to inline boilerplate, helpers save ~70% of the script and avoid common mistakes (frozen `node.fills`, missing `loadFontAsync`, etc.).
 
-### Bad vs good
-
-```js
-// Bad — verbose, easy to miss
-const f = JSON.parse(JSON.stringify(node.fills));
-f[0] = figma.variables.setBoundVariableForPaint(f[0], "color", v);
-node.fills = f;
-
-// Good — helper handles freezing + setBoundVariableForPaint
-await h.bF(node, 0, v);
-```
-
-```js
-// Bad — must remember to load fonts first; mixed-font case is silent
-await figma.loadFontAsync(node.fontName);
-node.characters = "new";
-
-// Good
-await h.setText(node, "new");
-```
-
-```js
-// Bad — manual font collection
-const texts = root.findAll(n => n.type === "TEXT");
-const fonts = [...new Set(texts.map(t => `${t.fontName.family}|${t.fontName.style}`))];
-// ... load each ...
-
-// Good
-await h.withFonts(root, async () => {
-  // bulk-edit text inside `root` here
-});
-```
 
 ## CLI subcommands (save tokens for common ops)
 

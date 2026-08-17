@@ -361,20 +361,27 @@ function findImageSlots(roots) {
   return slots;
 }
 
-// 🖼 reuse: картинки з УСЬОГО файлу → у плейсхолдери за пропорцією
+// 🖼 reuse: картинки з УСЬОГО файлу → у плейсхолдери за пропорцією (пул кешується 10 хв)
+let imgPoolCache = null;
 async function opImgReuse(roots, res) {
-  await figma.loadAllPagesAsync();
-  const pool = [];
-  const seen = new Set();
-  for (const pg of figma.root.children) {
-    for (const n of pg.findAll((c) => Array.isArray(c.fills))) {
-      for (const p of n.fills) {
-        if (p && p.type === "IMAGE" && p.imageHash && !seen.has(p.imageHash)) {
-          seen.add(p.imageHash);
-          pool.push({ hash: p.imageHash, w: n.width, h: n.height, from: pg.name + "/" + n.name });
+  let pool;
+  if (imgPoolCache && imgPoolCache.file === figma.root.name && Date.now() - imgPoolCache.t < 600000) {
+    pool = imgPoolCache.pool;
+  } else {
+    await figma.loadAllPagesAsync();
+    pool = [];
+    const seen = new Set();
+    for (const pg of figma.root.children) {
+      for (const n of pg.findAll((c) => Array.isArray(c.fills))) {
+        for (const p of n.fills) {
+          if (p && p.type === "IMAGE" && p.imageHash && !seen.has(p.imageHash)) {
+            seen.add(p.imageHash);
+            pool.push({ hash: p.imageHash, w: n.width, h: n.height, from: pg.name + "/" + n.name });
+          }
         }
       }
     }
+    imgPoolCache = { file: figma.root.name, t: Date.now(), pool };
   }
   if (!pool.length) throw new Error("no images in the file to reuse");
 
