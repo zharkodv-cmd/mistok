@@ -1,6 +1,6 @@
 {
-  "name": "Figmosha Bridge",
-  "id": "figmosha-bridge-dev",
+  "name": "Mistok",
+  "id": "mistok-bridge-dev",
   "api": "1.0.0",
   "main": "code.js",
   "ui": "ui.html",
@@ -8,6 +8,6 @@
   "permissions": ["teamlibrary", "activeusers", "fileusers", "currentuser"],
   "networkAccess": {
     "allowedDomains": ["http://localhost:8787", "ws://localhost:8787"],
-    "reasoning": "Local bridge to the Figmosha CLI server running on the user's machine."
+    "reasoning": "Local bridge to the Mistok CLI server running on the user's machine."
   }
 }

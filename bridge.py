@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Figmosha 2.0 bridge: HTTP -> WS -> Figma plugin -> back.
+"""Mistok 2.0 bridge: HTTP -> WS -> Figma plugin -> back.
 
-HTTP API (clients like curl / figmosha CLI talk here):
+HTTP API (clients like curl / mistok CLI talk here):
     POST /exec     {"code": "...", "timeout": 60} -> {ok, result, value, logs, elapsed_ms}
     GET  /status                                  -> {plugin_connected, pending}
 
@@ -129,7 +129,7 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
 async def exec_handler(request: web.Request) -> web.Response:
     if PLUGIN_WS is None or PLUGIN_WS.closed:
         return web.json_response(
-            {"ok": False, "error": "plugin not connected — open Figmosha Bridge in Figma"},
+            {"ok": False, "error": "plugin not connected — open Mistok Bridge in Figma"},
             status=503,
         )
 
@@ -196,7 +196,7 @@ async def status_handler(_request: web.Request) -> web.Response:
 
 async def root_handler(_request: web.Request) -> web.Response:
     return web.json_response({
-        "service": "figmosha-bridge",
+        "service": "mistok-bridge",
         "version": "2.0",
         "endpoints": {
             "POST /exec": "{code, timeout?} -> {ok, result, value, logs, elapsed_ms}",
@@ -216,7 +216,7 @@ def build_app() -> web.Application:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Figmosha 2.0 bridge server")
+    ap = argparse.ArgumentParser(description="Mistok 2.0 bridge server")
     ap.add_argument("--host", default="127.0.0.1", help="bind host (default 127.0.0.1)")
     ap.add_argument("--port", type=int, default=8787, help="bind port (default 8787)")
     args = ap.parse_args()

@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""figmosha — CLI client for the Figmosha 2.0 bridge.
+"""mistok — CLI client for the Mistok 2.0 bridge.
 
 Commands:
-    figmosha exec "<js>"             # run arbitrary JS in plugin context
-    figmosha exec --file f.js
-    figmosha exec --stdin
-    figmosha status                   # check server / plugin connection
-    figmosha tree <id> [--depth N]    # dump node subtree
-    figmosha find <id> <filter>       # find descendants (name=X, name~X, type=X, text=X)
-    figmosha text <id> "<new text>"   # set TEXT node characters (autoloads font)
-    figmosha variant <id> "P=V" ...   # set INSTANCE variant property values
-    figmosha clone <id> [--right|--left|--up|--down] [--gap N] [--name N]
-    figmosha rm <id>                  # remove node
-    figmosha import-component <key>   # import library component, instantiate, focus
-    figmosha shot <id> out.png [--scale 2]   # export node as PNG to local file
-    figmosha spec <id> [--depth N]    # compact design spec (geometry, fills, typography)
-    figmosha vars                     # dump local variables by collection
-    figmosha "<js>"                   # shorthand for `exec`
+    mistok exec "<js>"             # run arbitrary JS in plugin context
+    mistok exec --file f.js
+    mistok exec --stdin
+    mistok status                   # check server / plugin connection
+    mistok tree <id> [--depth N]    # dump node subtree
+    mistok find <id> <filter>       # find descendants (name=X, name~X, type=X, text=X)
+    mistok text <id> "<new text>"   # set TEXT node characters (autoloads font)
+    mistok variant <id> "P=V" ...   # set INSTANCE variant property values
+    mistok clone <id> [--right|--left|--up|--down] [--gap N] [--name N]
+    mistok rm <id>                  # remove node
+    mistok import-component <key>   # import library component, instantiate, focus
+    mistok shot <id> out.png [--scale 2]   # export node as PNG to local file
+    mistok spec <id> [--depth N]    # compact design spec (geometry, fills, typography)
+    mistok vars                     # dump local variables by collection
+    mistok "<js>"                   # shorthand for `exec`
 
 Helpers available inside exec'd code (as `h.*`):
     h.bF(node, idx, varOrId)    h.bS(node, idx, varOrId)   h.bN(node, prop, varOrId)
@@ -79,7 +79,7 @@ def _emit(resp, raw=False):
         print(f"  log: {line}", file=sys.stderr)
 
     if resp.get("ok") is False:
-        print(f"figmosha: {resp.get('error', 'unknown')}", file=sys.stderr)
+        print(f"mistok: {resp.get('error', 'unknown')}", file=sys.stderr)
         if resp.get("hint"):
             print(f"   hint: {resp['hint']}", file=sys.stderr)
         if resp.get("stack"):
@@ -109,7 +109,7 @@ def cmd_exec(args):
     elif args.code:
         code = args.code
     else:
-        print("figmosha: provide code (positional, --file, or --stdin)", file=sys.stderr)
+        print("mistok: provide code (positional, --file, or --stdin)", file=sys.stderr)
         return 2
     return _emit(_exec(code, args.timeout)[1], raw=args.raw)
 
@@ -130,7 +130,7 @@ def cmd_tree(args):
 
 def cmd_find(args):
     if "=" not in args.filter and "~" not in args.filter:
-        print("figmosha: filter must be key=value or key~value", file=sys.stderr)
+        print("mistok: filter must be key=value or key~value", file=sys.stderr)
         print("  forms: name=X (exact), name~X (substring), type=X, text=X (substring)", file=sys.stderr)
         return 2
 
@@ -141,7 +141,7 @@ def cmd_find(args):
         elif key == "text":
             predicate = f"n.type === 'TEXT' && n.characters.includes({json.dumps(value)})"
         else:
-            print(f"figmosha: substring filter only supports name~ and text~ (got {key}~)", file=sys.stderr)
+            print(f"mistok: substring filter only supports name~ and text~ (got {key}~)", file=sys.stderr)
             return 2
     else:
         key, value = args.filter.split("=", 1)
@@ -152,7 +152,7 @@ def cmd_find(args):
         elif key == "text":
             predicate = f"n.type === 'TEXT' && n.characters === {json.dumps(value)}"
         else:
-            print(f"figmosha: unknown filter key '{key}'. Use name, type, text", file=sys.stderr)
+            print(f"mistok: unknown filter key '{key}'. Use name, type, text", file=sys.stderr)
             return 2
 
     code = (
@@ -183,7 +183,7 @@ def cmd_variant(args):
     props = {}
     for kv in args.props:
         if "=" not in kv:
-            print(f"figmosha: variant prop must be 'Property=Value', got {kv!r}", file=sys.stderr)
+            print(f"mistok: variant prop must be 'Property=Value', got {kv!r}", file=sys.stderr)
             return 2
         k, v = kv.split("=", 1)
         props[k.strip()] = v.strip()
@@ -291,7 +291,7 @@ def _add_common_flags(p):
 
 
 def build_parser():
-    ap = argparse.ArgumentParser(prog="figmosha", description=__doc__.splitlines()[0],
+    ap = argparse.ArgumentParser(prog="mistok", description=__doc__.splitlines()[0],
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="localhost")
     ap.add_argument("--port", type=int, default=8787)
@@ -366,7 +366,7 @@ def build_parser():
 
 
 def main():
-    # Backward-compat shorthand: `figmosha "<js>"` → `figmosha exec "<js>"`
+    # Backward-compat shorthand: `mistok "<js>"` → `mistok exec "<js>"`
     if (
         len(sys.argv) >= 2
         and sys.argv[1] not in KNOWN_CMDS

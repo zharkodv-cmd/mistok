@@ -1,10 +1,10 @@
 const UI_SIZE = { open: { w: 320, h: 200 }, mini: { w: 126, h: 36 } };
-figma.showUI(__html__, { width: UI_SIZE.open.w, height: UI_SIZE.open.h, title: "Figmosha" });
+figma.showUI(__html__, { width: UI_SIZE.open.w, height: UI_SIZE.open.h, title: "Mistok" });
 
 // відновити згорнутий стан з минулого запуску
 (async () => {
   try {
-    const mini = await figma.clientStorage.getAsync("figmosha:mini");
+    const mini = await figma.clientStorage.getAsync("mistok:mini");
     if (mini) {
       figma.ui.resize(UI_SIZE.mini.w, UI_SIZE.mini.h);
       figma.ui.postMessage({ type: "uistate", mini: true });
@@ -281,7 +281,7 @@ figma.ui.onmessage = async (msg) => {
   if (msg.type === "ui") {
     const s = msg.mini ? UI_SIZE.mini : UI_SIZE.open;
     figma.ui.resize(s.w, s.h);
-    try { await figma.clientStorage.setAsync("figmosha:mini", !!msg.mini); } catch (e) {}
+    try { await figma.clientStorage.setAsync("mistok:mini", !!msg.mini); } catch (e) {}
     return;
   }
   if (msg.type !== "exec") return;

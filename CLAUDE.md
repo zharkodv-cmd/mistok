@@ -1,4 +1,4 @@
-# Figmosha 2.0 — Claude Code instructions
+# Mistok 2.0 — Claude Code instructions
 
 Drive Figma by sending JS code through a local bridge that's connected to a custom plugin running inside Figma Desktop.
 
@@ -8,18 +8,18 @@ Drive Figma by sending JS code through a local bridge that's connected to a cust
 
 ```bash
 # Preferred — subcommand-style
-python figmosha.py exec "return figma.currentPage.name"
-python figmosha.py exec --file script.js
+python mistok.py exec "return figma.currentPage.name"
+python mistok.py exec --file script.js
 
 # Shorthand (auto-prepends `exec`)
-python figmosha.py "return figma.currentPage.name"
+python mistok.py "return figma.currentPage.name"
 
 # High-level commands (covered below) save tokens for common operations
-python figmosha.py text 185:21880 "Привіт"
-python figmosha.py variant 185:21883 "Property 1=Default"
-python figmosha.py shot 185:21880 out.png --scale 2   # PNG export straight to file — NO base64 in context
-python figmosha.py spec 185:21880 --depth 3           # design spec, compact JSON — use INSTEAD of custom extraction JS
-python figmosha.py vars                               # all local variables by collection
+python mistok.py text 185:21880 "Привіт"
+python mistok.py variant 185:21883 "Property 1=Default"
+python mistok.py shot 185:21880 out.png --scale 2   # PNG export straight to file — NO base64 in context
+python mistok.py spec 185:21880 --depth 3           # design spec, compact JSON — use INSTEAD of custom extraction JS
+python mistok.py vars                               # all local variables by collection
 
 # Quick HTTP (no Python needed)
 curl -s -X POST http://localhost:8787/exec \
@@ -30,9 +30,9 @@ curl -s -X POST http://localhost:8787/exec \
 curl -s http://localhost:8787/status   # {"plugin_connected": true/false, "pending": 0}
 ```
 
-If the bridge isn't running: `bash start-bridge.sh` (runs in tmux `figmosha-bridge`; logs at `/tmp/figmosha-bridge.log`).
+If the bridge isn't running: `bash start-bridge.sh` (runs in tmux `mistok-bridge`; logs at `/tmp/mistok-bridge.log`).
 
-If the plugin isn't connected: tell the user — `Plugins → Development → Figmosha Bridge → Run`.
+If the plugin isn't connected: tell the user — `Plugins → Development → Mistok Bridge → Run`.
 
 ## Helpers (available as `h.*` in every exec)
 
@@ -97,16 +97,16 @@ await h.withFonts(root, async () => {
 
 | Command | Equivalent JS | Use case |
 |---|---|---|
-| `figmosha tree <id>` | `h.dumpTree(await h.node(id))` | Explore node structure |
-| `figmosha find <id> name=Button` | `(await h.node(id)).findAll(n => n.name === "Button")` | Locate by name |
-| `figmosha find <id> name~Btn` | `findAll(n => n.name.includes("Btn"))` | Substring name match |
-| `figmosha find <id> type=INSTANCE` | `findAll(n => n.type === "INSTANCE")` | Filter by type |
-| `figmosha find <id> text~Привіт` | `findAll(n => n.type === "TEXT" && n.characters.includes(...))` | Find by text |
-| `figmosha text <id> "новий"` | `await h.setText(n, "новий")` | Edit text safely |
-| `figmosha variant <id> "Property 1=Default"` | `await n.setProperties({...})` | Switch variant |
-| `figmosha clone <id> --right --gap 100` | `h.cloneNext(n, {direction:'right',gap:100})` | Duplicate adjacent |
-| `figmosha rm <id>` | `n.remove()` | Delete |
-| `figmosha icomp <key>` | `(await h.importComp(key)).createInstance()` | Pull from library |
+| `mistok tree <id>` | `h.dumpTree(await h.node(id))` | Explore node structure |
+| `mistok find <id> name=Button` | `(await h.node(id)).findAll(n => n.name === "Button")` | Locate by name |
+| `mistok find <id> name~Btn` | `findAll(n => n.name.includes("Btn"))` | Substring name match |
+| `mistok find <id> type=INSTANCE` | `findAll(n => n.type === "INSTANCE")` | Filter by type |
+| `mistok find <id> text~Привіт` | `findAll(n => n.type === "TEXT" && n.characters.includes(...))` | Find by text |
+| `mistok text <id> "новий"` | `await h.setText(n, "новий")` | Edit text safely |
+| `mistok variant <id> "Property 1=Default"` | `await n.setProperties({...})` | Switch variant |
+| `mistok clone <id> --right --gap 100` | `h.cloneNext(n, {direction:'right',gap:100})` | Duplicate adjacent |
+| `mistok rm <id>` | `n.remove()` | Delete |
+| `mistok icomp <key>` | `(await h.importComp(key)).createInstance()` | Pull from library |
 
 Use subcommands when the op fits one of these. Fall back to `exec` for anything else.
 
@@ -171,7 +171,7 @@ return root.findAll(n => n.type === "TEXT").map(t => t.characters)
 
 - **`plugin not connected` (503)**: plugin window closed in Figma. Ask user to Run it again.
 - **Timeout (504)**: probably infinite loop or unresolved `await`. Ask user to close & re-run plugin.
-- **`teamlibrary permission not specified`** (or similar): manifest needs a new permission. Edit `plugin/manifest.json`, sync to user's Windows copy (`/mnt/c/Users/User/figmosha-plugin/manifest.json` on their WSL), ask user to **re-import** the plugin (Plugins → Development → Manage plugins → remove + Import again).
+- **`teamlibrary permission not specified`** (or similar): manifest needs a new permission. Edit `plugin/manifest.json`, sync to user's Windows copy (`/mnt/c/Users/User/mistok-plugin/manifest.json` on their WSL), ask user to **re-import** the plugin (Plugins → Development → Manage plugins → remove + Import again).
 - **Result looks weird / undefined**: you forgot `return`. The wrapper expects a value.
 - **Switch Figma file → plugin disconnects**: plugin is bound to the open file. After switching, ask user to Run plugin again.
 
@@ -181,17 +181,17 @@ The error response includes a `hint` field for common cases — read it before d
 
 Усе локально, ніякого WSL і синхронізації.
 
-- Bridge + плагін: `~/Code/figmosha2/`
-- Figma Desktop вантажить плагін **напряму з репозиторію** — `~/Code/figmosha2/plugin/` (перевірено в `~/Library/Application Support/Figma/settings.json`). Правки в `code.js` / `ui.html` підхоплюються після **Run**, копіювати нікуди не треба. Re-Import потрібен лише при зміні `manifest.json`.
-- Venv: `~/Code/figmosha2/venv/` (arm64, Python 3.12)
-- Log: `/tmp/figmosha-bridge.log`
+- Bridge + плагін: `~/Code/mistok/`
+- Figma Desktop вантажить плагін **напряму з репозиторію** — `~/Code/mistok/plugin/` (перевірено в `~/Library/Application Support/Figma/settings.json`). Правки в `code.js` / `ui.html` підхоплюються після **Run**, копіювати нікуди не треба. Re-Import потрібен лише при зміні `manifest.json`.
+- Venv: `~/Code/mistok/venv/` (arm64, Python 3.12)
+- Log: `/tmp/mistok-bridge.log`
 
-Bridge запускається **автоматично через launchd** — агент `~/Library/LaunchAgents/com.figmosha.bridge.plist` (RunAtLoad + KeepAlive: стартує при логіні, сам рестартиться після падіння). Вручну запускати нічого не треба.
+Bridge запускається **автоматично через launchd** — агент `~/Library/LaunchAgents/com.mistok.bridge.plist` (RunAtLoad + KeepAlive: стартує при логіні, сам рестартиться після падіння). Вручну запускати нічого не треба.
 
 ```bash
 curl -s http://localhost:8787/status                      # перевірка
-launchctl kickstart -k gui/$(id -u)/com.figmosha.bridge   # примусовий рестарт
-launchctl bootout gui/$(id -u)/com.figmosha.bridge        # зупинити зовсім
+launchctl kickstart -k gui/$(id -u)/com.mistok.bridge   # примусовий рестарт
+launchctl bootout gui/$(id -u)/com.mistok.bridge        # зупинити зовсім
 ```
 
 Плагін у Figma після рестарту bridge перепідключається сам (~2 с). Запуск плагіна: **⌘⌥P** (повторити останній плагін) — автозапуску dev-плагінів Figma не має.
@@ -208,4 +208,4 @@ launchctl bootout gui/$(id -u)/com.figmosha.bridge        # зупинити з�
 
 ## UI плагіна
 
-Темна тема, статус-дот, кольоровий лог, лічильник виконань. Вікно згортається в компактну пігулку (кнопка `–`, клік по пігулці розгортає). Стан зберігається у `figma.clientStorage` під ключем `figmosha:mini` і переживає перезапуск. Розміри — у константі `UI_SIZE` в `code.js` (open 320×200, mini 126×36). Тайтл-бар із хрестиком — хром Figma, його прибрати не можна.
+Темна тема, статус-дот, кольоровий лог, лічильник виконань. Вікно згортається в компактну пігулку (кнопка `–`, клік по пігулці розгортає). Стан зберігається у `figma.clientStorage` під ключем `mistok:mini` і переживає перезапуск. Розміри — у константі `UI_SIZE` в `code.js` (open 320×200, mini 126×36). Тайтл-бар із хрестиком — хром Figma, його прибрати не можна.

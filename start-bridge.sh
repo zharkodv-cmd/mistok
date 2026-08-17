@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Start (or restart) the Figmosha bridge inside a detached tmux session.
-# Run from WSL: bash ~/figmosha2/start-bridge.sh
+# Start (or restart) the Mistok bridge inside a detached tmux session.
+# Run from WSL: bash ~/mistok/start-bridge.sh
 set -e
-SESSION="figmosha-bridge"
+SESSION="mistok-bridge"
 cd "$(dirname "$0")"
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
-tmux new-session -d -s "$SESSION" "./venv/bin/python bridge.py 2>&1 | tee /tmp/figmosha-bridge.log"
+tmux new-session -d -s "$SESSION" "./venv/bin/python bridge.py 2>&1 | tee /tmp/mistok-bridge.log"
 
 # Wait for it to be up
 for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -23,5 +23,5 @@ done
 
 echo "[start-bridge] FAILED to start within 1s"
 echo "[start-bridge] log:"
-cat /tmp/figmosha-bridge.log
+cat /tmp/mistok-bridge.log
 exit 1

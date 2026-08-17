@@ -1,6 +1,8 @@
-# Figmosha 2.0
+# Mistok
 
 Drive Figma from your terminal / Claude Code / any HTTP client. A tiny custom plugin sits inside Figma Desktop and holds a WebSocket to a local Python server — you send Figma Plugin API code over HTTP and get the result back.
+
+> Mistok («місток» — little bridge) is Dmytro Zharko's fork of [Figmosha 2.0](https://github.com/denysosadchyi/figmosha2) by Denys Osadchyi (MIT).
 
 No Playwright. No browser automation. No clipboard hacks. No screenshots.
 
@@ -10,7 +12,7 @@ Measured **150–950× faster** than browser-driven approaches: reads ~5 ms, mut
 
 The Figma Plugin API is the most stable and powerful interface Figma offers. Thousands of plugins depend on it. But typically it's only accessible *inside* Figma's UI — you click "Run plugin", code executes, results appear in a panel.
 
-Figmosha 2.0 keeps a plugin permanently open in Figma and exposes its Plugin API through a local network socket. You write code in your editor / Claude / a script, it runs inside Figma, and the result comes back to you.
+Mistok 2.0 keeps a plugin permanently open in Figma and exposes its Plugin API through a local network socket. You write code in your editor / Claude / a script, it runs inside Figma, and the result comes back to you.
 
 ```
 PowerShell / curl / Claude Code     bridge.py (Python)         Figma Desktop
@@ -19,7 +21,7 @@ PowerShell / curl / Claude Code     bridge.py (Python)         Figma Desktop
    POST /exec  ──────────────►   HTTP server                   │ open file  │
                                     │                          │            │
                                     ▼                          │ ┌────────┐ │
-                                 WS server  ──ws://localhost── ┤ │Figmosha│ │
+                                 WS server  ──ws://localhost── ┤ │Mistok│ │
                                                                │ │ Bridge │ │
                                     ▲                          │ │(plugin)│ │
                                     │                          │ └───┬────┘ │
@@ -50,8 +52,8 @@ PowerShell / curl / Claude Code     bridge.py (Python)         Figma Desktop
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/denysosadchyi/figmosha2.git
-cd figmosha2
+git clone https://github.com/denysosadchyi/figmosha2.git mistok
+cd mistok
 ```
 
 ### 2. Set up Python
@@ -79,23 +81,23 @@ python -m venv venv
 3. Top menu → **Plugins** → **Development** → **Import plugin from manifest…**
 4. Select `plugin/manifest.json` from this repo
 
-Figma registers "Figmosha Bridge" under `Plugins → Development`. You only do this once.
+Figma registers "Mistok Bridge" under `Plugins → Development`. You only do this once.
 
 **WSL2 note**: if your repo lives in WSL but Figma runs on Windows native, copy `plugin/` to a Windows-accessible path first:
 
 ```bash
-mkdir -p /mnt/c/Users/$WIN_USER/figmosha-plugin
-cp plugin/* /mnt/c/Users/$WIN_USER/figmosha-plugin/
+mkdir -p /mnt/c/Users/$WIN_USER/mistok-plugin
+cp plugin/* /mnt/c/Users/$WIN_USER/mistok-plugin/
 ```
 
-Then import `C:\Users\<your-name>\figmosha-plugin\manifest.json` in Figma.
+Then import `C:\Users\<your-name>\mistok-plugin\manifest.json` in Figma.
 
 ### 4. Start the bridge
 
 ```bash
 # macOS / Linux / WSL
 bash start-bridge.sh
-# starts in a detached tmux session "figmosha-bridge"
+# starts in a detached tmux session "mistok-bridge"
 
 # OR: just run it in a terminal you keep open
 ./venv/bin/python bridge.py
@@ -113,7 +115,7 @@ The server listens on `127.0.0.1:8787`. Output:
 
 ### 5. Run the plugin in Figma
 
-In Figma Desktop: **Plugins** → **Development** → **Figmosha Bridge** → **Run**.
+In Figma Desktop: **Plugins** → **Development** → **Mistok Bridge** → **Run**.
 
 A small window appears: **bridge: connected** (green). In the server terminal you'll see `[plugin] connected from 127.0.0.1`. You're live.
 
@@ -122,13 +124,13 @@ A small window appears: **bridge: connected** (green). In the server terminal yo
 In a second terminal:
 
 ```bash
-./venv/bin/python figmosha.py status
+./venv/bin/python mistok.py status
 # → {"plugin_connected": true, "pending": 0}
 
-./venv/bin/python figmosha.py "return figma.currentPage.name"
+./venv/bin/python mistok.py "return figma.currentPage.name"
 # → "Page 1"
 
-./venv/bin/python figmosha.py "const r = figma.createRectangle(); r.x = 100; r.y = 100; r.resize(200, 100); r.name = 'smoketest'; return r.id"
+./venv/bin/python mistok.py "const r = figma.createRectangle(); r.x = 100; r.y = 100; r.resize(200, 100); r.name = 'smoketest'; return r.id"
 # → "1:23"  (and a rectangle appears in Figma)
 ```
 
@@ -140,7 +142,7 @@ If all three work — you're done.
 
 ```bash
 bash start-bridge.sh   # or however you start the bridge
-# In Figma: Plugins → Development → Figmosha Bridge → Run
+# In Figma: Plugins → Development → Mistok Bridge → Run
 ```
 
 The bridge survives SSH disconnects and terminal closes (tmux). It does **not** survive OS reboot or WSL shutdown — restart it after either.
@@ -149,13 +151,13 @@ The bridge survives SSH disconnects and terminal closes (tmux). It does **not** 
 
 ```bash
 # Inline JS
-python figmosha.py "return figma.currentPage.children.length"
+python mistok.py "return figma.currentPage.children.length"
 
 # From a file
-python figmosha.py exec --file my-script.js
+python mistok.py exec --file my-script.js
 
 # From stdin
-cat my-script.js | python figmosha.py exec --stdin
+cat my-script.js | python mistok.py exec --stdin
 
 # Plain HTTP (no Python needed)
 curl -s http://localhost:8787/exec \
@@ -168,21 +170,21 @@ curl -s http://localhost:8787/exec \
 When the operation fits one of these, use the dedicated subcommand — much less typing and less risk of escape bugs:
 
 ```bash
-python figmosha.py tree 1:23 --depth 2          # dump subtree
-python figmosha.py find 1:23 name=Button         # find by exact name
-python figmosha.py find 1:23 name~Btn            # substring name match
-python figmosha.py find 1:23 type=INSTANCE       # filter by type
-python figmosha.py find 1:23 text~hello          # find TEXT containing "hello"
-python figmosha.py text 1:25 "new content"       # set TEXT chars (autoloads fonts)
-python figmosha.py variant 1:30 "Property 1=Default"
-python figmosha.py clone 1:23 --right --gap 100  # clone adjacent
-python figmosha.py rm 1:99                       # delete a node
-python figmosha.py icomp <component-key>         # import library component, place + zoom
-python figmosha.py shot 1:23 hero.png --scale 2  # export node as PNG to a local file
-python figmosha.py spec 1:23 --depth 3           # compact design spec: geometry, auto-layout,
+python mistok.py tree 1:23 --depth 2          # dump subtree
+python mistok.py find 1:23 name=Button         # find by exact name
+python mistok.py find 1:23 name~Btn            # substring name match
+python mistok.py find 1:23 type=INSTANCE       # filter by type
+python mistok.py find 1:23 text~hello          # find TEXT containing "hello"
+python mistok.py text 1:25 "new content"       # set TEXT chars (autoloads fonts)
+python mistok.py variant 1:30 "Property 1=Default"
+python mistok.py clone 1:23 --right --gap 100  # clone adjacent
+python mistok.py rm 1:99                       # delete a node
+python mistok.py icomp <component-key>         # import library component, place + zoom
+python mistok.py shot 1:23 hero.png --scale 2  # export node as PNG to a local file
+python mistok.py spec 1:23 --depth 3           # compact design spec: geometry, auto-layout,
                                                  #   fills/strokes as hex or var(name), typography
-python figmosha.py vars                          # all local variables by collection (aliases as →name)
-python figmosha.py status                        # bridge + plugin connection state
+python mistok.py vars                          # all local variables by collection (aliases as →name)
+python mistok.py status                        # bridge + plugin connection state
 ```
 
 `spec` and `vars` print **compact single-line JSON** — designed for AI agents that pay per token. `shot` decodes the PNG locally, so no base64 ever hits your terminal.
@@ -228,8 +230,8 @@ Compared to inlined boilerplate, helpers reduce a typical script by ~60–70% an
 When a script fails with a recognized pattern, the response includes a `hint` field. The CLI prints it for you:
 
 ```
-$ figmosha.py "node.characters = 'x'"
-figmosha: Cannot write to node with unloaded font "Inter Regular"...
+$ mistok.py "node.characters = 'x'"
+mistok: Cannot write to node with unloaded font "Inter Regular"...
    hint: use h.setText(node, text) or h.withFonts(root, fn) — they autoload fonts
 ```
 
@@ -248,7 +250,7 @@ Currently hints cover: fills/strokes variable binding, frozen arrays, missing ma
 | Symptom | Cause | Fix |
 |---|---|---|
 | `connection refused` from CLI | Server not running | `bash start-bridge.sh` (or run `bridge.py` in a terminal) |
-| `plugin not connected` (503) | Plugin window closed | Plugins → Development → Figmosha Bridge → Run |
+| `plugin not connected` (503) | Plugin window closed | Plugins → Development → Mistok Bridge → Run |
 | Plugin says `disconnected, retrying…` | Server is down or restarting | Start it; plugin auto-reconnects within 2 s |
 | 504 timeout | Code threw silently or `await` never resolved | Close the plugin (X), Run again. Increase `--timeout` for legitimately long ops |
 | `permission not specified in manifest` | API needs a permission not declared in `manifest.json` | Add to `permissions` array, sync to Windows path if applicable, **re-import** plugin |
@@ -261,13 +263,13 @@ Currently hints cover: fills/strokes variable binding, frozen arrays, missing ma
 
 ```
 bridge.py              HTTP/WS server (~200 lines)
-figmosha.py            CLI client (~300 lines)
+mistok.py            CLI client (~300 lines)
 start-bridge.sh        tmux-based bridge management
 plugin/
   manifest.json        Permissions + allowed origins
   code.js              Plugin sandbox: exec + helpers
   ui.html              WS client + auto-reconnect + log panel
-CLAUDE.md              Conventions for Claude Code sessions driving Figmosha
+CLAUDE.md              Conventions for Claude Code sessions driving Mistok
 README.md              This file
 ```
 
@@ -276,7 +278,7 @@ README.md              This file
 The plugin runtime is just `new Function("figma", "print", "h", body)`. Add helpers to `HELPERS` in `plugin/code.js`, sync the file to your plugin path, and they're available in your next `exec`.
 
 To add a new CLI subcommand:
-1. Add a `cmd_<name>(args)` function in `figmosha.py` that builds JS via `json.dumps`-escaped templates
+1. Add a `cmd_<name>(args)` function in `mistok.py` that builds JS via `json.dumps`-escaped templates
 2. Add a subparser in `build_parser()`
 3. Register in the `dispatch` map
 
