@@ -81,7 +81,7 @@ python -m venv venv
 3. Top menu → **Plugins** → **Development** → **Import plugin from manifest…**
 4. Select `plugin/manifest.json` from this repo
 
-Figma registers "Mistok Bridge" under `Plugins → Development`. You only do this once.
+Figma registers "Mistok" under `Plugins → Development`. You only do this once.
 
 **WSL2 note**: if your repo lives in WSL but Figma runs on Windows native, copy `plugin/` to a Windows-accessible path first:
 
@@ -115,7 +115,7 @@ The server listens on `127.0.0.1:8787`. Output:
 
 ### 5. Run the plugin in Figma
 
-In Figma Desktop: **Plugins** → **Development** → **Mistok Bridge** → **Run**.
+In Figma Desktop: **Plugins** → **Development** → **Mistok** → **Run**.
 
 A small window appears: **bridge: connected** (green). In the server terminal you'll see `[plugin] connected from 127.0.0.1`. You're live.
 
@@ -124,13 +124,13 @@ A small window appears: **bridge: connected** (green). In the server terminal yo
 In a second terminal:
 
 ```bash
-./venv/bin/python mistok.py status
+./venv/bin/python mistok status
 # → {"plugin_connected": true, "pending": 0}
 
-./venv/bin/python mistok.py "return figma.currentPage.name"
+./venv/bin/python mistok "return figma.currentPage.name"
 # → "Page 1"
 
-./venv/bin/python mistok.py "const r = figma.createRectangle(); r.x = 100; r.y = 100; r.resize(200, 100); r.name = 'smoketest'; return r.id"
+./venv/bin/python mistok "const r = figma.createRectangle(); r.x = 100; r.y = 100; r.resize(200, 100); r.name = 'smoketest'; return r.id"
 # → "1:23"  (and a rectangle appears in Figma)
 ```
 
@@ -142,7 +142,7 @@ If all three work — you're done.
 
 ```bash
 bash start-bridge.sh   # or however you start the bridge
-# In Figma: Plugins → Development → Mistok Bridge → Run
+# In Figma: Plugins → Development → Mistok → Run
 ```
 
 The bridge survives SSH disconnects and terminal closes (tmux). It does **not** survive OS reboot or WSL shutdown — restart it after either.
@@ -151,13 +151,13 @@ The bridge survives SSH disconnects and terminal closes (tmux). It does **not** 
 
 ```bash
 # Inline JS
-python mistok.py "return figma.currentPage.children.length"
+python mistok "return figma.currentPage.children.length"
 
 # From a file
-python mistok.py exec --file my-script.js
+python mistok exec --file my-script.js
 
 # From stdin
-cat my-script.js | python mistok.py exec --stdin
+cat my-script.js | python mistok exec --stdin
 
 # Plain HTTP (no Python needed)
 curl -s http://localhost:8787/exec \
@@ -170,21 +170,21 @@ curl -s http://localhost:8787/exec \
 When the operation fits one of these, use the dedicated subcommand — much less typing and less risk of escape bugs:
 
 ```bash
-python mistok.py tree 1:23 --depth 2          # dump subtree
-python mistok.py find 1:23 name=Button         # find by exact name
-python mistok.py find 1:23 name~Btn            # substring name match
-python mistok.py find 1:23 type=INSTANCE       # filter by type
-python mistok.py find 1:23 text~hello          # find TEXT containing "hello"
-python mistok.py text 1:25 "new content"       # set TEXT chars (autoloads fonts)
-python mistok.py variant 1:30 "Property 1=Default"
-python mistok.py clone 1:23 --right --gap 100  # clone adjacent
-python mistok.py rm 1:99                       # delete a node
-python mistok.py icomp <component-key>         # import library component, place + zoom
-python mistok.py shot 1:23 hero.png --scale 2  # export node as PNG to a local file
-python mistok.py spec 1:23 --depth 3           # compact design spec: geometry, auto-layout,
+python mistok tree 1:23 --depth 2          # dump subtree
+python mistok find 1:23 name=Button         # find by exact name
+python mistok find 1:23 name~Btn            # substring name match
+python mistok find 1:23 type=INSTANCE       # filter by type
+python mistok find 1:23 text~hello          # find TEXT containing "hello"
+python mistok text 1:25 "new content"       # set TEXT chars (autoloads fonts)
+python mistok variant 1:30 "Property 1=Default"
+python mistok clone 1:23 --right --gap 100  # clone adjacent
+python mistok rm 1:99                       # delete a node
+python mistok icomp <component-key>         # import library component, place + zoom
+python mistok shot 1:23 hero.png --scale 2  # export node as PNG to a local file
+python mistok spec 1:23 --depth 3           # compact design spec: geometry, auto-layout,
                                                  #   fills/strokes as hex or var(name), typography
-python mistok.py vars                          # all local variables by collection (aliases as →name)
-python mistok.py status                        # bridge + plugin connection state
+python mistok vars                          # all local variables by collection (aliases as →name)
+python mistok status                        # bridge + plugin connection state
 ```
 
 `spec` and `vars` print **compact single-line JSON** — designed for AI agents that pay per token. `shot` decodes the PNG locally, so no base64 ever hits your terminal.
@@ -230,7 +230,7 @@ Compared to inlined boilerplate, helpers reduce a typical script by ~60–70% an
 When a script fails with a recognized pattern, the response includes a `hint` field. The CLI prints it for you:
 
 ```
-$ mistok.py "node.characters = 'x'"
+$ mistok "node.characters = 'x'"
 mistok: Cannot write to node with unloaded font "Inter Regular"...
    hint: use h.setText(node, text) or h.withFonts(root, fn) — they autoload fonts
 ```
@@ -250,7 +250,7 @@ Currently hints cover: fills/strokes variable binding, frozen arrays, missing ma
 | Symptom | Cause | Fix |
 |---|---|---|
 | `connection refused` from CLI | Server not running | `bash start-bridge.sh` (or run `bridge.py` in a terminal) |
-| `plugin not connected` (503) | Plugin window closed | Plugins → Development → Mistok Bridge → Run |
+| `plugin not connected` (503) | Plugin window closed | Plugins → Development → Mistok → Run |
 | Plugin says `disconnected, retrying…` | Server is down or restarting | Start it; plugin auto-reconnects within 2 s |
 | 504 timeout | Code threw silently or `await` never resolved | Close the plugin (X), Run again. Increase `--timeout` for legitimately long ops |
 | `permission not specified in manifest` | API needs a permission not declared in `manifest.json` | Add to `permissions` array, sync to Windows path if applicable, **re-import** plugin |
@@ -263,7 +263,7 @@ Currently hints cover: fills/strokes variable binding, frozen arrays, missing ma
 
 ```
 bridge.py              HTTP/WS server (~200 lines)
-mistok.py            CLI client (~300 lines)
+mistok            CLI client (~300 lines)
 start-bridge.sh        tmux-based bridge management
 plugin/
   manifest.json        Permissions + allowed origins
@@ -278,7 +278,7 @@ README.md              This file
 The plugin runtime is just `new Function("figma", "print", "h", body)`. Add helpers to `HELPERS` in `plugin/code.js`, sync the file to your plugin path, and they're available in your next `exec`.
 
 To add a new CLI subcommand:
-1. Add a `cmd_<name>(args)` function in `mistok.py` that builds JS via `json.dumps`-escaped templates
+1. Add a `cmd_<name>(args)` function in `mistok` that builds JS via `json.dumps`-escaped templates
 2. Add a subparser in `build_parser()`
 3. Register in the `dispatch` map
 

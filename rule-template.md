@@ -8,18 +8,18 @@
 
 - Server: `http://localhost:8787`. Health check: `curl -s localhost:8787/status` → `{"plugin_connected": true}`.
 - The bridge auto-starts via launchd (`com.mistok.bridge`); force-restart: `launchctl kickstart -k gui/$(id -u)/com.mistok.bridge`. Figma Desktop must be open with **Plugins → Development → Mistok** running (auto-reconnects within 2 s; fastest re-run: ⌘⌥P).
-- Execute JS: `cd ~/Code/mistok && ./venv/bin/python mistok.py "<js>"`. Top-level `await` and `return` work; helpers `h.*` are available (see mistok README).
+- Execute JS: `mistok "<js>"`. Top-level `await` and `return` work; helpers `h.*` are available (see mistok README).
 
 ## Command mapping (instead of Figma MCP tools)
 
 | Need | Use |
 |---|---|
-| File/page structure | `mistok.py tree <nodeId> --depth 2` |
-| Design context of a node | `mistok.py spec <nodeId> [--depth N]` — compact JSON: geometry, auto-layout, fills/strokes as hex or `var(name)`, typography, effects, layout `grids`, `IMAGE:<hash>` fills |
-| Screenshot | `mistok.py shot <nodeId> out.png [--scale 2]` — PNG straight to file, no base64 in context |
-| Design tokens / variables | `mistok.py vars` — all local variables by collection, aliases as `→name` |
-| Find / edit text / variants / clone | `mistok.py find | text | variant | clone | rm | icomp` |
-| Anything else | `mistok.py exec "<js>"` (or `--file script.js`) |
+| File/page structure | `mistok tree <nodeId> --depth 2` |
+| Design context of a node | `mistok spec <nodeId> [--depth N]` — compact JSON: geometry, auto-layout, fills/strokes as hex or `var(name)`, typography, effects, layout `grids`, `IMAGE:<hash>` fills |
+| Screenshot | `mistok shot <nodeId> out.png [--scale 2]` — PNG straight to file, no base64 in context |
+| Design tokens / variables | `mistok vars` — all local variables by collection, aliases as `→name` |
+| Find / edit text / variants / clone | `mistok find | text | variant | clone | rm | icomp` |
+| Anything else | `mistok exec "<js>"` (or `--file script.js`) |
 
 ## Images: Magnific MCP
 

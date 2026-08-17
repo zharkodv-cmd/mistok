@@ -8,18 +8,18 @@ Drive Figma by sending JS code through a local bridge that's connected to a cust
 
 ```bash
 # Preferred — subcommand-style
-python mistok.py exec "return figma.currentPage.name"
-python mistok.py exec --file script.js
+mistok exec "return figma.currentPage.name"
+mistok exec --file script.js
 
 # Shorthand (auto-prepends `exec`)
-python mistok.py "return figma.currentPage.name"
+mistok "return figma.currentPage.name"
 
 # High-level commands (covered below) save tokens for common operations
-python mistok.py text 185:21880 "Привіт"
-python mistok.py variant 185:21883 "Property 1=Default"
-python mistok.py shot 185:21880 out.png --scale 2   # PNG export straight to file — NO base64 in context
-python mistok.py spec 185:21880 --depth 3           # design spec, compact JSON — use INSTEAD of custom extraction JS
-python mistok.py vars                               # all local variables by collection
+mistok text 185:21880 "Привіт"
+mistok variant 185:21883 "Property 1=Default"
+mistok shot 185:21880 out.png --scale 2   # PNG export straight to file — NO base64 in context
+mistok spec 185:21880 --depth 3           # design spec, compact JSON — use INSTEAD of custom extraction JS
+mistok vars                               # all local variables by collection
 
 # Quick HTTP (no Python needed)
 curl -s -X POST http://localhost:8787/exec \
