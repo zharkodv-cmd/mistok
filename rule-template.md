@@ -51,3 +51,11 @@ The button writes `/tmp/mistok-redesign-request.json` (section spec + instructio
 ## Прототип (кнопка ▭ у плагіні)
 
 Кнопка пише запит у `/tmp/mistok-prototype-request.json` (spec джерела + інструкція). Коли користувач каже «зроби прототип»: прочитай запит; якщо джерело — бітмап (фрейм з одним IMAGE-прямокутником) — `mistok shot` і прочитай візуально; збери поруч із джерелом сучасний мінімалістичний прототип: Inter (Regular/Medium/Semi Bold — саме «Semi Bold» з пробілом), чорно-біло-сірий (#111/#6B6B6B/#F0F0F0/#E5E5E5), повний auto-layout, ВСІ тексти і логіка джерела. Після виконання видали файл запиту.
+
+## Design from prototype (◆ button)
+
+Writes `/tmp/mistok-design-request.json`. On «build the design»: FIRST load the `impeccable` skill (Skill tool), read the request; build a full award-grade design NEXT TO the prototype using the file's variables (respect scopes), text styles and assets; brand register, bold committed direction, no AI slop; 1 polished variant + short design notes. Delete the request file when done.
+
+## Redesign — addendum
+
+The source may be a bitmap screenshot/sketch (frame with one IMAGE rectangle) — mistok shot it and read visually first. Spacing/scale/composition come from the REFERENCE by eye (never copy the source paddings); only colors/type/assets from our file. Finish with impeccable-grade craft.

@@ -342,6 +342,113 @@ def urllib_request_json(url, payload):
         return json.loads(r.read())
 
 
+
+async def run_alplan(request: dict):
+    """Smart auto-layout: Claude планує групування, bridge застосовує план."""
+    frames = request.get("frames") or []
+    if not frames:
+        return
+    print(f"[alplan] start: {len(frames)} frame(s)", flush=True)
+    try:
+        import shutil
+        env = dict(os.environ)
+        env["PATH"] = env.get("PATH", "") + f":{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+        claude = shutil.which("claude", path=env["PATH"])
+        if not claude:
+            await send_plugin({"type": "chatreply", "text": "auto-layout: claude CLI not found"})
+            return
+        prompt = (
+            "You are a senior product designer preparing Figma frames for auto-layout. "
+            "For each frame you get its size and direct children (id, name, type, x, y, w, h, text). "
+            "Decide what belongs together and output ONLY JSON, no prose:\n"
+            '{"frames":[{"frameId":"<id>","direction":"VERTICAL|HORIZONTAL","gap":<n>,"padding":[t,r,b,l],'
+            '"children":[<entries in final visual order>]}]}\n'
+            'Entry forms: {"type":"group","name":"<short>","direction":"HORIZONTAL|VERTICAL","gap":<n>,"ids":["..."]} '
+            'for items that belong together (visual rows/columns, icon+text pairs, label+value, card contents); '
+            '{"type":"node","id":"..."} for standalone items; '
+            '{"type":"node","id":"...","absolute":true} for full-bleed backgrounds (cover >60% of the frame) — keep those first. '
+            "Derive gap from the actual median spacing, padding from the content offsets to the frame edges. "
+            "Frames: " + json.dumps(frames, ensure_ascii=False)
+        )
+        proc = await asyncio.create_subprocess_exec(
+            claude, "-p", prompt, "--model", "sonnet", "--dangerously-skip-permissions",
+            cwd=str(Path.home()), env=env,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            out, _err = await asyncio.wait_for(proc.communicate(), timeout=240)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await send_plugin({"type": "chatreply", "text": "auto-layout: timeout"})
+            return
+        raw = out.decode("utf-8", "replace")
+        start, end = raw.find("{"), raw.rfind("}")
+        plan = None
+        if start != -1 and end > start:
+            try:
+                plan = json.loads(raw[start:end + 1])
+            except json.JSONDecodeError:
+                plan = None
+        if not plan or not plan.get("frames"):
+            await send_plugin({"type": "chatreply", "text": "auto-layout: could not parse the plan"})
+            print(f"[alplan] parse fail: {raw[:200]}", flush=True)
+            return
+        code = (
+            "const PLAN = " + json.dumps(plan, ensure_ascii=False) + ";\n"
+            "const made = [];\n"
+            "for (const fp of PLAN.frames) {\n"
+            "  const f = await figma.getNodeByIdAsync(fp.frameId);\n"
+            "  if (!f || f.type !== 'FRAME') continue;\n"
+            "  const order = [];\n"
+            "  const absIds = [];\n"
+            "  for (const ch of (fp.children || [])) {\n"
+            "    if (ch.type === 'group') {\n"
+            "      const nodes = [];\n"
+            "      for (const id of (ch.ids || [])) { const n = await figma.getNodeByIdAsync(id); if (n && n.parent === f) nodes.push(n); }\n"
+            "      if (!nodes.length) continue;\n"
+            "      const minX = Math.min(...nodes.map(n => n.x)), minY = Math.min(...nodes.map(n => n.y));\n"
+            "      const maxX = Math.max(...nodes.map(n => n.x + n.width)), maxY = Math.max(...nodes.map(n => n.y + n.height));\n"
+            "      const w = figma.createFrame();\n"
+            "      f.appendChild(w);\n"
+            "      w.name = ch.name || 'group'; w.x = minX; w.y = minY;\n"
+            "      w.resize(Math.max(1, maxX - minX), Math.max(1, maxY - minY));\n"
+            "      w.fills = []; w.clipsContent = false;\n"
+            "      nodes.sort((a, b) => (ch.direction === 'VERTICAL' ? a.y - b.y : a.x - b.x));\n"
+            "      for (const n of nodes) { const ax = n.x - minX, ay = n.y - minY; w.appendChild(n); n.x = ax; n.y = ay; }\n"
+            "      w.layoutMode = ch.direction || 'HORIZONTAL';\n"
+            "      w.primaryAxisSizingMode = 'AUTO'; w.counterAxisSizingMode = 'AUTO';\n"
+            "      w.itemSpacing = typeof ch.gap === 'number' ? ch.gap : 16;\n"
+            "      order.push(w); made.push(w.name + 'x' + nodes.length);\n"
+            "    } else if (ch.id) {\n"
+            "      const n = await figma.getNodeByIdAsync(ch.id);\n"
+            "      if (n && n.parent === f) { order.push(n); if (ch.absolute) absIds.push(ch.id); }\n"
+            "    }\n"
+            "  }\n"
+            "  order.forEach((n, i) => f.insertChild(i, n));\n"
+            "  f.layoutMode = fp.direction || 'VERTICAL';\n"
+            "  f.primaryAxisSizingMode = 'FIXED'; f.counterAxisSizingMode = 'FIXED';\n"
+            "  if (typeof fp.gap === 'number') f.itemSpacing = fp.gap;\n"
+            "  if (Array.isArray(fp.padding) && fp.padding.length === 4) {\n"
+            "    f.paddingTop = fp.padding[0]; f.paddingRight = fp.padding[1];\n"
+            "    f.paddingBottom = fp.padding[2]; f.paddingLeft = fp.padding[3];\n"
+            "  }\n"
+            "  for (const id of absIds) { const n = await figma.getNodeByIdAsync(id); if (n) { try { n.layoutPositioning = 'ABSOLUTE'; } catch (e) {} } }\n"
+            "}\n"
+            "figma.commitUndo();\n"
+            "figma.notify('Smart auto-layout: ' + made.length + ' groups');\n"
+            "return { groups: made };"
+        )
+        resp = await asyncio.to_thread(
+            urllib_request_json, "http://127.0.0.1:8787/exec", {"code": code, "timeout": 90})
+        groups = ((resp.get("value") or {}).get("groups")) or []
+        await send_plugin({"type": "chatreply",
+                          "text": "Smart auto-layout applied: " + (", ".join(groups) if groups else "structure set")})
+        print(f"[alplan] applied: {groups}", flush=True)
+    except Exception as e:
+        print(f"[alplan] failed: {e}", flush=True)
+
+
 async def stats_pusher(ws: web.WebSocketResponse):
     """Push usage stats to the plugin UI every 60s while it's connected."""
     try:
@@ -459,6 +566,21 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                         "text": "▭ Prototype request for \"" + str(req.get('frame', {}).get('name')) + "\" is ready.\nTell Claude in a session: build the prototype"}))
                 except OSError as e:
                     print(f"[proto] failed: {e}", flush=True)
+                continue
+            if mtype == "designrequest":
+                try:
+                    req = m.get("request") or {}
+                    req["ts"] = datetime.now().astimezone().isoformat(timespec="seconds")
+                    with open("/tmp/mistok-design-request.json", "w", encoding="utf-8") as f:
+                        json.dump(req, f, ensure_ascii=False, indent=1)
+                    print(f"[design] request: {req.get('frame', {}).get('name')} → /tmp/mistok-design-request.json", flush=True)
+                    await send_plugin({"type": "chatreply",
+                        "text": "◆ Design request for \"" + str(req.get('frame', {}).get('name')) + "\" is ready.\nTell Claude in a session: build the design"})
+                except OSError as e:
+                    print(f"[design] failed: {e}", flush=True)
+                continue
+            if mtype == "alplanrequest":
+                asyncio.create_task(run_alplan(m.get("request") or {}))
                 continue
             if mtype == "redesignrequest":
                 try:

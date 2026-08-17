@@ -447,191 +447,28 @@ async function opImgRequest(roots, res) {
   res.changes.push("request for " + slots.length + " images → tell Claude: \"insert the images\"");
 }
 
-// логічний auto-layout для фрейма з вільно розставленими дітьми
-function median(a) {
-  if (!a.length) return 0;
-  const s = a.slice().sort((x, y) => x - y);
-  return s[Math.floor(s.length / 2)];
-}
-
-function alBind(node, prop, floats, res) {
-  const m = nearestNum(floats, node[prop], "GAP");
-  if (m) { node.setBoundVariable(prop, m.v); res.changes.push(node.name + "." + prop + " → " + m.v.name); }
-}
-
-function alApply(f, res, floats) {
-  const all = f.children.slice();
-  // фонові шари (покривають >85% фрейма) — виводимо з потоку
-  const bg = [], kids = [];
-  for (const k of all) {
-    (k.width * k.height > f.width * f.height * 0.85 ? bg : kids).push(k);
-  }
-  if (kids.length < 2) { res.skipped.push(f.name + " (<2 elements in flow)"); return; }
-
-  // кластеризація в рядки за перекриттям по y
-  kids.sort((a, b) => a.y - b.y);
-  const rows = [];
-  for (const k of kids) {
-    const row = rows.find((r) => {
-      const top = Math.min(...r.map((n) => n.y));
-      const bot = Math.max(...r.map((n) => n.y + n.height));
-      const ov = Math.min(bot, k.y + k.height) - Math.max(top, k.y);
-      return ov > Math.min(k.height, bot - top) * 0.5;
-    });
-    if (row) row.push(k); else rows.push([k]);
-  }
-  rows.forEach((r) => r.sort((a, b) => a.x - b.x));
-
-  let items;
-  let dir = "VERTICAL";
-  if (rows.length === 1) {
-    dir = "HORIZONTAL";
-    items = rows[0];
-  } else {
-    items = rows.map((r) => {
-      if (r.length === 1) return r[0];
-      // багатоелементний рядок → обгортка row з HORIZONTAL AL
-      const minX = Math.min(...r.map((n) => n.x));
-      const minY = Math.min(...r.map((n) => n.y));
-      const maxX = Math.max(...r.map((n) => n.x + n.width));
-      const maxY = Math.max(...r.map((n) => n.y + n.height));
-      const wrap = figma.createFrame();
-      f.appendChild(wrap);
-      wrap.x = minX; wrap.y = minY;
-      wrap.resize(maxX - minX, maxY - minY);
-      wrap.fills = []; wrap.name = "row"; wrap.clipsContent = false;
-      const gaps = [];
-      for (let i = 1; i < r.length; i++) gaps.push(Math.max(0, r[i].x - (r[i - 1].x + r[i - 1].width)));
-      for (const n of r) { const ax = n.x - minX, ay = n.y - minY; wrap.appendChild(n); n.x = ax; n.y = ay; }
-      wrap.layoutMode = "HORIZONTAL";
-      wrap.primaryAxisSizingMode = "FIXED"; wrap.counterAxisSizingMode = "FIXED";
-      wrap.itemSpacing = Math.round(median(gaps));
-      alBind(wrap, "itemSpacing", floats, res);
-      res.changes.push(f.name + ": row×" + r.length + " gap:" + wrap.itemSpacing);
-      return wrap;
-    });
-    items.sort((a, b) => a.y - b.y);
-  }
-
-  // порядок дітей = візуальний порядок (AL стекає за індексом)
-  items.forEach((n, i) => f.insertChild(i, n));
-
-  const minX = Math.min(...items.map((n) => n.x));
-  const minY = Math.min(...items.map((n) => n.y));
-  const maxX = Math.max(...items.map((n) => n.x + n.width));
-  const maxY = Math.max(...items.map((n) => n.y + n.height));
-  const gaps = [];
-  for (let i = 1; i < items.length; i++) {
-    gaps.push(Math.max(0, dir === "VERTICAL"
-      ? items[i].y - (items[i - 1].y + items[i - 1].height)
-      : items[i].x - (items[i - 1].x + items[i - 1].width)));
-  }
-
-  f.layoutMode = dir;
-  f.primaryAxisSizingMode = "FIXED"; f.counterAxisSizingMode = "FIXED";
-  f.itemSpacing = Math.round(median(gaps));
-  f.paddingLeft = Math.max(0, Math.round(minX));
-  f.paddingTop = Math.max(0, Math.round(minY));
-  f.paddingRight = Math.max(0, Math.round(f.width - maxX));
-  f.paddingBottom = Math.max(0, Math.round(f.height - maxY));
-  for (const p of ["itemSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft"]) {
-    if (f[p] > 0) alBind(f, p, floats, res);
-  }
-
-  for (const b of bg) { b.layoutPositioning = "ABSOLUTE"; res.changes.push(b.name + " → absolute (background)"); }
-  res.changes.push(f.name + ": " + dir + " gap:" + f.itemSpacing +
-    " pad:" + [f.paddingTop, f.paddingRight, f.paddingBottom, f.paddingLeft].join(","));
-}
-
+// smart auto-layout: знімок фрейма → план від Claude → застосовує bridge
 async function opAutoLayout(roots, res) {
-  // кандидати: будь-які фрейми без AL з 2+ дітьми у всьому піддереві
   const targets = [];
   for (const n of walkAll(roots)) {
     if (n.type === "FRAME" && (!n.layoutMode || n.layoutMode === "NONE") && n.children && n.children.length > 1) {
       targets.push(n);
-      if (targets.length >= 24) break;
+      if (targets.length >= 3) break;
     }
   }
   if (!targets.length) throw new Error("no frames without auto-layout with 2+ children in the selection");
-  const floats = await floatVarList();
-  for (const f of targets) alApply(f, res, floats);
-}
-
-// snap до колонок layout grid: x і ширина до червоних колонок; y не чіпаємо
-async function opGrid(roots, res) {
-  for (const root of roots) {
-    // сітку шукаємо на самому фреймі або вище по дереву
-    let host = root;
-    while (host && !(host.layoutGrids || []).some((g) => g.pattern === "COLUMNS" && g.visible !== false)) {
-      host = host.parent;
-      if (!host || host.type === "PAGE") { host = null; break; }
-    }
-    if (!host || !root.children) { res.skipped.push(root.name + " (no COLUMNS layout grid)"); continue; }
-    const grid = host.layoutGrids.find((g) => g.pattern === "COLUMNS" && g.visible !== false);
-    const count = grid.count, gutter = grid.gutterSize || 0;
-    let colW, colX0;
-    if (grid.alignment === "STRETCH") {
-      const offset = grid.offset || 0;
-      colW = (host.width - offset * 2 - gutter * (count - 1)) / count;
-      colX0 = offset;
-    } else if (grid.alignment === "CENTER") {
-      colW = grid.sectionSize || 60;
-      const total = count * colW + (count - 1) * gutter;
-      colX0 = (host.width - total) / 2;
-    } else { // MIN / MAX
-      colW = grid.sectionSize || 60;
-      colX0 = grid.alignment === "MAX"
-        ? host.width - (grid.offset || 0) - (count * colW + (count - 1) * gutter)
-        : (grid.offset || 0);
-    }
-    // координати дітей root у системі host
-    const shift = host === root ? 0 : (root.absoluteTransform[0][2] - host.absoluteTransform[0][2]);
-    const colX = (i) => colX0 + i * (colW + gutter);
-    const snapX = (x) => {
-      let best = colX(0), bd = Infinity;
-      for (let i = 0; i < count; i++) { const d = Math.abs(colX(i) - x); if (d < bd) { bd = d; best = colX(i); } }
-      return Math.round(best);
-    };
-    const snapW = (w) => {
-      let best = colW, bd = Infinity;
-      for (let n = 1; n <= count; n++) {
-        const cw = n * colW + (n - 1) * gutter;
-        const d = Math.abs(cw - w);
-        if (d < bd) { bd = d; best = cw; }
-      }
-      return Math.round(best);
-    };
-    if (root.type === "INSTANCE") { res.skipped.push(root.name + " (instance internals are locked)"); continue; }
-    for (const n of root.children) {
-      if (typeof n.x !== "number") continue;
-      const hx = n.x + shift;                 // x у координатах host
-      const nx = snapX(hx) - shift;
-      const nw = typeof n.resize === "function" && n.type !== "TEXT" ? snapW(n.width) : null;
-      const moved = Math.abs(nx - n.x) > 0.5;
-      const sized = nw !== null && Math.abs(nw - n.width) > 0.5;
-      try {
-        if (moved) n.x = nx;
-        if (sized) n.resize(nw, n.height);
-        if (moved || sized) res.changes.push(n.name + " → x:" + Math.round(nx + shift) + (sized ? " w:" + nw : ""));
-      } catch (e) { res.skipped.push(n.name + " (locked)"); }
-    }
-  }
-  if (!res.changes.length && !res.skipped.length) res.skipped.push("nothing to align");
-}
-
-// збір текстів на вичитку — виконує headless Claude через bridge
-async function opSpell(roots, res) {
-  const texts = [];
-  for (const n of walkAll(roots)) {
-    if (n.type !== "TEXT") continue;
-    const s = n.characters;
-    if (s && s.trim().length >= 2) texts.push({ id: n.id, text: s.slice(0, 500) });
-    if (texts.length >= 120) break;
-  }
-  if (!texts.length) throw new Error("no texts in the selection");
-  res.request = null; // не Magnific-запит
-  res.spell = { texts };
-  res.changes.push("sent to spellcheck: " + texts.length + " texts → Claude runs in background");
+  res.alplan = {
+    frames: targets.map((f) => ({
+      id: f.id, name: f.name, w: Math.round(f.width), h: Math.round(f.height),
+      children: f.children.map((c) => ({
+        id: c.id, name: c.name, type: c.type,
+        x: Math.round(c.x), y: Math.round(c.y),
+        w: Math.round(c.width || 0), h: Math.round(c.height || 0),
+        text: c.type === "TEXT" ? (c.characters || "").slice(0, 60) : undefined,
+      })),
+    })),
+  };
+  res.changes.push("layout snapshot: " + targets.map((t) => t.name).join(", ") + " → Claude plans the auto-layout");
 }
 
 // запит на редизайн секції за референсами awwwards — виконує Claude-сесія
@@ -642,7 +479,10 @@ async function opRedesign(roots, res) {
     frame: { id: root.id, name: root.name, w: Math.round(root.width), h: Math.round(root.height) },
     spec,
     instruction: "awwwards SOTD/honorable mentions → find 2-3 sections similar in meaning → " +
-      "redraw this section in their spirit using our variables/text styles/assets, variants placed next to the original",
+      "redraw this section in their spirit NEXT TO the original, with impeccable-skill craft applied on top. " +
+      "If the source is a bitmap (screenshot/sketch — a frame with one IMAGE rectangle), take a mistok shot and read it visually first. " +
+      "Spacing, scale and composition come from the REFERENCE (match its visual rhythm and generous whitespace by eye — " +
+      "do NOT copy the source's paddings/gaps); only colors, type styles and assets come from our file (variables with scopes, text styles).",
   };
   res.changes.push("redesign request \"" + root.name + "\" → tell Claude: \"redesign the section\"");
 }
@@ -661,6 +501,49 @@ async function opPrototype(roots, res) {
   res.changes.push("prototype request \"" + root.name + "\" → tell Claude: \"build the prototype\"");
 }
 
+
+
+// док-фрейм зі звітом поруч із першою нодою виділення
+async function placeReport(roots, res, kindLabel) {
+  const root0 = roots[0];
+  const parent = root0.parent && root0.parent.type !== "PAGE" ? figma.currentPage : (root0.parent || figma.currentPage);
+  await figma.loadFontAsync({ family: "Inter", style: "Regular" });
+  await figma.loadFontAsync({ family: "Inter", style: "Medium" });
+  const repName = kindLabel + " · " + root0.name;
+  const old = parent.findOne ? parent.findOne((c) => c.name === repName) : null;
+  if (old) old.remove(); // замінюємо власний попередній звіт
+  const rep = figma.createFrame();
+  parent.appendChild(rep);
+  rep.name = repName;
+  rep.layoutMode = "VERTICAL";
+  rep.primaryAxisSizingMode = "AUTO"; rep.counterAxisSizingMode = "AUTO";
+  rep.paddingTop = 20; rep.paddingBottom = 20; rep.paddingLeft = 24; rep.paddingRight = 24;
+  rep.itemSpacing = 6; rep.cornerRadius = 8;
+  rep.fills = [{ type: "SOLID", color: { r: 0.075, g: 0.075, b: 0.085 } }];
+  const abs = root0.absoluteTransform;
+  rep.x = abs[0][2] + root0.width + 40 - (parent.absoluteTransform ? parent.absoluteTransform[0][2] : 0);
+  rep.y = abs[1][2] - (parent.absoluteTransform ? parent.absoluteTransform[1][2] : 0);
+  const title = figma.createText();
+  title.fontName = { family: "Inter", style: "Medium" }; title.fontSize = 13;
+  title.characters = res.changes[0] || repName;
+  title.fills = [{ type: "SOLID", color: { r: 0.95, g: 0.95, b: 0.96 } }];
+  rep.appendChild(title);
+  for (const line of res.changes.slice(1, 33)) {
+    const t = figma.createText();
+    t.fontName = { family: "Inter", style: "Regular" }; t.fontSize = 11;
+    t.characters = "·  " + line;
+    t.fills = [{ type: "SOLID", color: { r: 0.66, g: 0.66, b: 0.7 } }];
+    rep.appendChild(t);
+  }
+  if (res.changes.length > 33) {
+    const t = figma.createText();
+    t.fontName = { family: "Inter", style: "Regular" }; t.fontSize = 11;
+    t.characters = "… +" + (res.changes.length - 33) + " more (see /tmp/mistok-ops.log)";
+    t.fills = [{ type: "SOLID", color: { r: 0.5, g: 0.5, b: 0.54 } }];
+    rep.appendChild(t);
+  }
+  res.reportPlaced = true;
+}
 
 // ── Lint: read-only аудит виділеного — що ще не приведено до системи ─────
 async function opLint(roots, res) {
@@ -722,6 +605,7 @@ async function opLint(roots, res) {
     " spacing:" + counts.spacing + " text-styles:" + counts.textstyles +
     " names:" + counts.names + " px:" + counts.px + " off-grid:" + counts.offgrid);
   res.readonly = true;
+  if (total > 0) await placeReport(roots, res, "lint");
 }
 
 // ── Contrast: WCAG-перевірка текстів проти фактичного фону (read-only) ───
@@ -779,16 +663,31 @@ async function opContrast(roots, res) {
   }
   res.changes.unshift("CONTRAST: " + fails + " fail / " + ok + " pass (WCAG AA)");
   res.readonly = true;
+  if (fails > 0) await placeReport(roots, res, "contrast");
+}
+
+// запит на повноцінний award-дизайн з прототипу — виконує Claude з impeccable skill
+async function opImpeccable(roots, res) {
+  const root = roots[0];
+  const spec = await HELPERS.spec(root, { maxDepth: 4 });
+  res.design = {
+    frame: { id: root.id, name: root.name, w: Math.round(root.width), h: Math.round(root.height) },
+    spec,
+    instruction: "load the impeccable skill first; from this prototype build a full award-grade page design " +
+      "NEXT TO the source using the file's variables (respect scopes), text styles and existing assets; " +
+      "brand register; commit to a bold direction, no AI slop; 1 polished variant + short design notes",
+  };
+  res.changes.push("design request \"" + root.name + "\" → tell Claude: \"build the design\"");
 }
 
 const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor,
   textstyle: opTextStyles, sectionize: opSectionize, imgreuse: opImgReuse, imggen: opImgRequest,
   autolayout: opAutoLayout, grid: opGrid, spell: opSpell, redesign: opRedesign, prototype: opPrototype,
-  lint: opLint, contrast: opContrast };
+  lint: opLint, contrast: opContrast, impeccable: opImpeccable };
 const OP_NAMES = { clean: "Clean", rename: "Rename", varsal: "AL→vars", varscolor: "Colors→vars",
   textstyle: "Text styles", sectionize: "Sectionize", imgreuse: "Img reuse", imggen: "Magnific request",
   autolayout: "Auto-layout", grid: "Grid snap", spell: "Spellcheck", redesign: "Redesign",
-  prototype: "Prototype", lint: "Lint", contrast: "Contrast" };
+  prototype: "Prototype", lint: "Lint", contrast: "Contrast", impeccable: "Design" };
 
 function safeStringify(value) {
   if (value === undefined) return null;
@@ -1090,7 +989,9 @@ figma.ui.onmessage = async (msg) => {
       if (res.spell) figma.ui.postMessage({ type: "spellrequest", texts: res.spell.texts });
       if (res.redesign) figma.ui.postMessage({ type: "redesignrequest", request: res.redesign });
       if (res.prototype) figma.ui.postMessage({ type: "protorequest", request: res.prototype });
-      if (!res.readonly) figma.commitUndo(); // кожна мутація = окремий крок undo
+      if (res.design) figma.ui.postMessage({ type: "designrequest", request: res.design });
+      if (res.alplan) figma.ui.postMessage({ type: "alplanrequest", request: res.alplan });
+      if (!res.readonly || res.reportPlaced) figma.commitUndo(); // мутації і звіт-фрейми = undo-крок
     } catch (e) {
       figma.notify("Error " + OP_NAMES[msg.kind] + ": " + ((e && e.message) || e));
       figma.ui.postMessage({ type: "opreport", kind: msg.kind, error: true,
