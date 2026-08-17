@@ -557,7 +557,8 @@ async function opRedesign(roots, res) {
       "Redraw it in their spirit NEXT TO the original, with impeccable-skill craft applied on top. " +
       "If the source is a bitmap (screenshot/sketch — a frame with one IMAGE rectangle), take a mistok shot and read it visually first. " +
       "Spacing, scale and composition come from the REFERENCE (match its visual rhythm and generous whitespace by eye — " +
-      "do NOT copy the source's paddings/gaps); only colors, type styles and assets come from our file (variables with scopes, text styles).",
+      "do NOT copy the source's paddings/gaps). Styling is STRICTLY the file's design system: ONLY its color variables (scopes), " +
+      "ONLY its text styles, ONLY existing assets — never invent hex values or ad-hoc fonts; pick the closest token when unsure.",
   };
   res.changes.push("redesign request \"" + root.name + "\" → tell Claude: \"redesign the section\"");
 }
@@ -746,12 +747,12 @@ async function opRecreate(roots, res) {
   const root = roots[0];
   res.design = {
     frame: { id: root.id, name: root.name, w: Math.round(root.width), h: Math.round(root.height) },
-    instruction: "PIXEL-PERFECT recreation of this screenshot as editable Figma layers. " +
+    instruction: "PIXEL-PERFECT recreation of this screenshot as editable Figma layers, styled STRICTLY with this file's design system. " +
       "mistok shot the source at scale 1-2 and read it carefully; rebuild NEXT TO the source at 1:1 size: " +
-      "exact positions and sizes, colors sampled from the image (bind to file variables only on exact/near match), " +
-      "real TEXT nodes with matching font size/weight/line-height (project fonts or Inter), " +
-      "rectangles/fills/borders/radii/shadows as seen, image areas as IMAGE-fill placeholders cropped from the shot when possible. " +
-      "Verify with a side-by-side shot comparison and fix deltas before finishing.",
+      "exact positions and sizes. Colors: ONLY the file's color variables (pick the closest token by eye, respect scopes) — never raw sampled hex. " +
+      "Typography: ONLY the file's text styles (closest match); real TEXT nodes. " +
+      "Spacing values snap to the file's size variables where close. " +
+      "Image areas as IMAGE-fill placeholders. Verify with a side-by-side shot comparison and fix layout deltas before finishing.",
   };
   res.changes.push("recreate request \"" + root.name + "\" → tell Claude: \"recreate the design\"");
 }
