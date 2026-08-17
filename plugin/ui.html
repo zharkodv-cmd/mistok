@@ -5,15 +5,17 @@
   * { box-sizing: border-box; }
   :root {
     --bg: #1e1e22; --panel: #131316; --border: #2e2e34;
-    --text: #e6e6ea; --muted: #8a8a93;
+    --text: #e6e6ea; --muted: #8a8a93; --dim: #7f7f89;
     --ok: #4ade80; --err: #f87171; --pend: #fbbf24; --accent: #7dd3fc;
   }
+  html, body { height: 100%; }
   body {
     font-family: "Inter", system-ui, -apple-system, sans-serif;
-    margin: 0; padding: 8px; font-size: 12px;
+    margin: 0; padding: 8px; font-size: 11px;
     background: var(--bg); color: var(--text);
+    display: flex; flex-direction: column; gap: 6px; overflow: hidden;
   }
-  .row { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+  .row { display: flex; align-items: center; gap: 7px; flex: none; }
   #dot {
     width: 8px; height: 8px; border-radius: 50%; flex: none;
     background: var(--pend); transition: background .2s;
@@ -23,28 +25,34 @@
   #dot.pending { background: var(--pend); animation: pulse 1s infinite; }
   @keyframes pulse { 50% { opacity: .35; } }
   /* назва вже у тайтл-барі Figma — у відкритому режимі не дублюємо */
-  #brand { display: none; font-weight: 600; font-size: 11px; letter-spacing: .2px; }
+  #brand { display: none; font-weight: 600; letter-spacing: .2px; }
   #status { font-family: ui-monospace, monospace; font-size: 10px; color: var(--muted); }
   #count {
-    font-family: ui-monospace, monospace; font-size: 10px; color: var(--accent);
-    background: rgba(125,211,252,.08); border: 1px solid rgba(125,211,252,.18);
-    border-radius: 9px; padding: 1px 7px;
+    font-family: ui-monospace, monospace; font-size: 10px; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 9px; padding: 1px 7px;
+    margin-left: auto;
   }
-  #server { color: var(--muted); font-size: 10px; font-family: ui-monospace, monospace;
-            margin-left: auto; }
+  #count.active {
+    color: var(--accent);
+    background: rgba(125,211,252,.08); border-color: rgba(125,211,252,.18);
+  }
+  button { transition: background .15s; }
+  button:active { transform: translateY(1px); }
   #toggle {
     border: 1px solid var(--border); background: transparent; border-radius: 5px;
-    width: 22px; height: 22px; line-height: 1; cursor: pointer; color: var(--muted);
+    width: 22px; height: 22px; cursor: pointer; color: var(--muted);
     font-size: 14px; padding: 0; flex: none;
+    display: grid; place-items: center;
   }
   #toggle:hover { background: var(--panel); color: var(--text); }
   #log {
     background: var(--panel); border: 1px solid var(--border);
-    padding: 6px 8px; border-radius: 6px; height: 138px; overflow-y: auto;
-    font-family: ui-monospace, "SF Mono", monospace; font-size: 10.5px;
+    padding: 6px 8px; border-radius: 6px;
+    flex: 1; min-height: 56px; overflow-y: auto;
+    font-family: ui-monospace, "SF Mono", monospace; font-size: 10px;
     line-height: 1.5; margin: 0; white-space: pre-wrap; word-break: break-all;
   }
-  #log .t { color: #55555e; }
+  #log .t { color: var(--dim); }
   #log .ok { color: var(--ok); }
   #log .err { color: var(--err); }
   #log .exec { color: var(--accent); }
@@ -54,51 +62,51 @@
 
   #stats {
     font-family: ui-monospace, monospace; font-size: 10px; color: var(--muted);
-    margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none;
   }
   #stats b { color: var(--text); font-weight: 500; }
-  #stats .up { color: var(--ok); }
   #summary {
-    font-size: 10px; color: #6b6b74; margin-bottom: 6px; font-style: italic;
+    font-size: 10px; color: var(--dim); font-style: italic; flex: none;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  #stats:empty, #summary:empty, #limits:empty, #sel:empty { display: none; }
+  #summary:empty, #limits:empty, #sel:empty { display: none; }
 
   #sel {
-    display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
-    font-family: ui-monospace, monospace; font-size: 10.5px;
+    display: flex; align-items: center; gap: 6px; flex: none;
+    font-family: ui-monospace, monospace;
     background: var(--panel); border: 1px solid var(--border);
     border-radius: 5px; padding: 4px 7px;
   }
   #sel .selid { color: var(--accent); }
   #sel .selname { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #sel .selmeta { color: var(--muted); flex: none; }
+  #sel .selmeta { color: var(--muted); font-size: 10px; flex: none; }
   #sel button {
     flex: none; border: 1px solid var(--border); background: transparent;
-    border-radius: 4px; color: var(--muted); cursor: pointer; font-size: 11px;
+    border-radius: 4px; color: var(--muted); cursor: pointer;
     padding: 1px 6px; line-height: 1.4;
   }
   #sel button:first-of-type { margin-left: auto; }
   #sel button:hover { background: var(--bg); color: var(--text); }
 
-  #limits { margin-bottom: 6px; }
-  .lim { margin-bottom: 5px; }
+  #limits { flex: none; display: flex; flex-direction: column; gap: 5px; }
   .lim .lrow {
     display: flex; justify-content: space-between; align-items: baseline;
     font-size: 10px; margin-bottom: 2px;
   }
-  .lim .lname { color: var(--text); font-weight: 500; }
+  .lim .lname { color: var(--text); font-weight: 500; font-size: 11px; }
   .lim .lmeta { color: var(--muted); font-family: ui-monospace, monospace; }
   .lim .track {
     height: 4px; border-radius: 2px; background: var(--border); overflow: hidden;
   }
+  /* fill = скільки ЛИШИЛОСЬ (збігається з підписом «N% left») */
   .lim .fill { height: 100%; border-radius: 2px; background: var(--ok); transition: width .3s; }
   .lim .fill.warn { background: var(--pend); }
   .lim .fill.hot { background: var(--err); }
 
   /* згорнутий режим — темна пігулка */
-  body.mini { padding: 0; cursor: pointer; }
+  body.mini { padding: 0; cursor: pointer; display: block; }
   body.mini .row { margin: 0; height: 36px; padding: 0 10px; gap: 6px; }
+  body.mini:hover { background: var(--panel); }
   body.mini #log, body.mini #server, body.mini #status, body.mini #count,
   body.mini #stats, body.mini #summary, body.mini #limits, body.mini #sel { display: none; }
   body.mini #brand { display: inline; color: var(--muted); }
@@ -108,14 +116,13 @@
   <div class="row">
     <span id="dot" class="pending"></span>
     <span id="brand">Mistok</span>
-    <span id="status">connecting…</span>
-    <span id="count">0</span>
-    <span id="server">:8787</span>
+    <span id="status" title="ws://localhost:8787/plugin">connecting…</span>
+    <span id="count" title="виконань за сесію bridge">0</span>
     <button id="toggle" title="Згорнути / розгорнути">–</button>
   </div>
-  <div id="sel"></div>
   <div id="limits"></div>
-  <div id="stats"></div>
+  <div id="sel"></div>
+  <div id="stats">очікую статистику…</div>
   <div id="summary"></div>
   <pre id="log"></pre>
 
@@ -159,6 +166,11 @@ function setStatus(text, cls) {
   dotEl.className = cls;
 }
 
+function setCount(n) {
+  countEl.textContent = n;
+  countEl.classList.toggle("active", n > 0);
+}
+
 function shortId(id) {
   return id ? String(id).slice(0, 8) : "?";
 }
@@ -189,7 +201,7 @@ function renderStats(s) {
   const c = s.claude || {};
   const parts = [];
   const dur = fmtMin(c.session_min);
-  if (dur) parts.push('<span class="up">⏱ ' + dur + "</span>");
+  if (dur) parts.push("⏱ " + dur);
   if (c.project) parts.push("<b>" + c.project + "</b>");
   parts.push("сьогодні: <b>" + (c.msgs || 0) + "</b> msg");
   parts.push("↑" + fmtTok(c.in_tok || 0) + " ↓" + fmtTok(c.out_tok || 0));
@@ -198,15 +210,16 @@ function renderStats(s) {
 
   if (s.execs != null) {
     execCount = s.execs;
-    countEl.textContent = s.execs;
-    countEl.title = (s.avg_ms != null ? "avg " + s.avg_ms + "ms" : "") +
+    setCount(s.execs);
+    countEl.title = "виконань за сесію bridge" +
+                    (s.avg_ms != null ? " · avg " + s.avg_ms + "ms" : "") +
                     (s.errors ? " · errors " + s.errors : "");
   }
 
   const lims = (s.limits || []).filter(l => LIM_NAMES[l.kind] || (l.model && l.percent > 0));
-  // попередження при підході до ліміту — раз на вікно ресету
+  // попередження при підході до ліміту — раз на вікно ресету, поріг = «гарячий» бар
   lims.forEach(l => {
-    const hot = (l.percent || 0) >= 90 || l.severity === "critical" || l.severity === "high";
+    const hot = (l.percent || 0) >= 80 || l.severity === "critical" || l.severity === "high";
     const key = l.kind + (l.resets_at || "");
     if (hot && !limNotified[key]) {
       limNotified[key] = true;
@@ -216,13 +229,14 @@ function renderStats(s) {
   });
   document.getElementById("limits").innerHTML = lims.map(l => {
     const used = Math.max(0, Math.min(100, l.percent || 0));
+    const left = 100 - used;
     const cls = used >= 80 || l.severity === "critical" ? "hot"
               : used >= 50 || l.severity === "warning" ? "warn" : "";
     const name = LIM_NAMES[l.kind] || l.model;
     return '<div class="lim">' +
       '<div class="lrow"><span class="lname">' + name + "</span>" +
-      '<span class="lmeta">' + (100 - used) + "% left · " + fmtReset(l.resets_at) + "</span></div>" +
-      '<div class="track"><div class="fill ' + cls + '" style="width:' + used + '%"></div></div></div>';
+      '<span class="lmeta">' + left + "% left · " + fmtReset(l.resets_at) + "</span></div>" +
+      '<div class="track"><div class="fill ' + cls + '" style="width:' + left + '%"></div></div></div>';
   }).join("");
 }
 
@@ -250,8 +264,7 @@ function connect() {
       return;
     }
     if (msg.type === "exec") {
-      execCount++;
-      countEl.textContent = execCount;
+      setCount(++execCount);
       const tag = MUT_RE.test(msg.code || "") ? "[exec✎]" : "[exec]";
       log(`${tag} ${shortId(msg.id)} code=${(msg.code || "").length}b`);
       parent.postMessage({ pluginMessage: { type: "exec", id: msg.id, code: msg.code } }, "*");
@@ -274,6 +287,45 @@ function connect() {
   };
 }
 
+// ── selection row ────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+}
+function copyText(t) {
+  const ta = document.createElement("textarea");
+  ta.value = t;
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); } catch (e) {}
+  ta.remove();
+}
+function flash(btn, glyph, revert) {
+  btn.textContent = glyph;
+  setTimeout(() => { btn.textContent = revert; }, 900);
+}
+function renderSel(m) {
+  const el = document.getElementById("sel");
+  if (!m.nodes || !m.nodes.length) { el.innerHTML = ""; return; }
+  const n = m.nodes[0];
+  const more = m.total > 1 ? " +" + (m.total - 1) : "";
+  el.innerHTML =
+    '<span class="selid">' + escHtml(n.id) + "</span>" +
+    '<span class="selname">' + escHtml(n.name) + "</span>" +
+    '<span class="selmeta">' + n.w + "×" + n.h + more + "</span>" +
+    '<button id="copySel" title="Copy node id">⧉ id</button>' +
+    '<button id="shotSel" title="PNG @2x → буфер + Desktop/mistok-shots">📷</button>';
+  document.getElementById("copySel").onclick = (e) => {
+    e.stopPropagation();
+    copyText(m.nodes.map((x) => x.id).join(","));
+    flash(e.target, "✓", "⧉ id");
+  };
+  document.getElementById("shotSel").onclick = (e) => {
+    e.stopPropagation();
+    parent.postMessage({ pluginMessage: { type: "shotsel" } }, "*");
+    flash(e.target, "⏳", "📷");
+  };
+}
+
 // ── згортання ────────────────────────────────────────────────────────────
 let mini = false;
 const toggleEl = document.getElementById("toggle");
@@ -288,41 +340,6 @@ function setMini(next, tell) {
 toggleEl.onclick = (e) => { e.stopPropagation(); setMini(!mini, true); };
 // у згорнутому стані клік будь-де розгортає
 document.body.onclick = () => { if (mini) setMini(false, true); };
-
-// ── selection row ────────────────────────────────────────────────────────
-function escHtml(s) {
-  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
-}
-function copyText(t) {
-  const ta = document.createElement("textarea");
-  ta.value = t;
-  document.body.appendChild(ta);
-  ta.select();
-  try { document.execCommand("copy"); } catch (e) {}
-  ta.remove();
-}
-function renderSel(m) {
-  const el = document.getElementById("sel");
-  if (!m.nodes || !m.nodes.length) { el.innerHTML = ""; return; }
-  const n = m.nodes[0];
-  const more = m.total > 1 ? " +" + (m.total - 1) : "";
-  el.innerHTML =
-    '<span class="selid">' + escHtml(n.id) + "</span>" +
-    '<span class="selname">' + escHtml(n.name) + "</span>" +
-    '<span class="selmeta">' + n.w + "×" + n.h + more + "</span>" +
-    '<button id="copySel" title="Copy node id">⧉ id</button>' +
-    '<button id="shotSel" title="PNG @2x → Desktop/mistok-shots">📷</button>';
-  document.getElementById("copySel").onclick = (e) => {
-    e.stopPropagation();
-    copyText(m.nodes.map((x) => x.id).join(","));
-    e.target.textContent = "✓";
-    setTimeout(() => { e.target.textContent = "⧉ id"; }, 900);
-  };
-  document.getElementById("shotSel").onclick = (e) => {
-    e.stopPropagation();
-    parent.postMessage({ pluginMessage: { type: "shotsel" } }, "*");
-  };
-}
 
 window.onmessage = (e) => {
   const m = e.data && e.data.pluginMessage;

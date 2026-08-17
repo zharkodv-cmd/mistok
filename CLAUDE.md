@@ -1,4 +1,4 @@
-# Mistok 2.0 — Claude Code instructions
+# Mistok — Claude Code instructions
 
 Drive Figma by sending JS code through a local bridge that's connected to a custom plugin running inside Figma Desktop.
 
@@ -20,6 +20,7 @@ mistok variant 185:21883 "Property 1=Default"
 mistok shot 185:21880 out.png --scale 2   # PNG export straight to file — NO base64 in context
 mistok spec 185:21880 --depth 3           # design spec, compact JSON — use INSTEAD of custom extraction JS
 mistok vars                               # all local variables by collection
+mistok sel                                # current selection — use when user says «цей фрейм»
 
 # Quick HTTP (no Python needed)
 curl -s -X POST http://localhost:8787/exec \
@@ -30,9 +31,9 @@ curl -s -X POST http://localhost:8787/exec \
 curl -s http://localhost:8787/status   # {"plugin_connected": true/false, "pending": 0}
 ```
 
-If the bridge isn't running: `bash start-bridge.sh` (runs in tmux `mistok-bridge`; logs at `/tmp/mistok-bridge.log`).
+If the bridge isn't running: `launchctl kickstart -k gui/$(id -u)/com.mistok.bridge` (launchd agent; logs at `/tmp/mistok-bridge.log`).
 
-If the plugin isn't connected: tell the user — `Plugins → Development → Mistok Bridge → Run`.
+If the plugin isn't connected: tell the user — `Plugins → Development → Mistok → Run` (or ⌘⌥P).
 
 ## Helpers (available as `h.*` in every exec)
 
@@ -107,6 +108,10 @@ await h.withFonts(root, async () => {
 | `mistok clone <id> --right --gap 100` | `h.cloneNext(n, {direction:'right',gap:100})` | Duplicate adjacent |
 | `mistok rm <id>` | `n.remove()` | Delete |
 | `mistok icomp <key>` | `(await h.importComp(key)).createInstance()` | Pull from library |
+| `mistok shot <id> out.png [--scale 2]` | `exportAsync` → decode locally | Screenshot, no base64 in context |
+| `mistok spec <id> [--depth N]` | `await h.spec(n, {maxDepth})` | Compact design spec JSON |
+| `mistok vars` | `await h.varsDump()` | All variables by collection |
+| `mistok sel` | `figma.currentPage.selection.map(...)` | What the user selected («цей фрейм») |
 
 Use subcommands when the op fits one of these. Fall back to `exec` for anything else.
 
@@ -171,7 +176,7 @@ return root.findAll(n => n.type === "TEXT").map(t => t.characters)
 
 - **`plugin not connected` (503)**: plugin window closed in Figma. Ask user to Run it again.
 - **Timeout (504)**: probably infinite loop or unresolved `await`. Ask user to close & re-run plugin.
-- **`teamlibrary permission not specified`** (or similar): manifest needs a new permission. Edit `plugin/manifest.json`, sync to user's Windows copy (`/mnt/c/Users/User/mistok-plugin/manifest.json` on their WSL), ask user to **re-import** the plugin (Plugins → Development → Manage plugins → remove + Import again).
+- **`teamlibrary permission not specified`** (or similar): manifest needs a new permission. Edit `plugin/manifest.json` (Figma loads it straight from `~/Code/mistok/plugin/`), then ask user to **re-import** the plugin (Plugins → Development → Manage plugins → remove + Import again).
 - **Result looks weird / undefined**: you forgot `return`. The wrapper expects a value.
 - **Switch Figma file → plugin disconnects**: plugin is bound to the open file. After switching, ask user to Run plugin again.
 
@@ -208,4 +213,4 @@ launchctl bootout gui/$(id -u)/com.mistok.bridge        # зупинити зо�
 
 ## UI плагіна
 
-Темна тема, статус-дот, кольоровий лог, лічильник виконань. Вікно згортається в компактну пігулку (кнопка `–`, клік по пігулці розгортає). Стан зберігається у `figma.clientStorage` під ключем `mistok:mini` і переживає перезапуск. Розміри — у константі `UI_SIZE` в `code.js` (open 320×200, mini 126×36). Тайтл-бар із хрестиком — хром Figma, його прибрати не можна.
+Темна тема, статус-дот, кольоровий лог. Зверху вниз: limit-бари Claude (session/weekly, notify при ≥80%), рядок виділення (id + кнопки **⧉** copy та **📷** — PNG @2x у `~/Desktop/mistok-shots/` і в системний буфер), stats-рядок (тривалість сесії, проєкт, msgs, токени — push з bridge кожні 60 с), summary сесії, лог з підсвіткою мутацій (`[exec✎]`). Вікно згортається в компактну пігулку (кнопка `–`, клік розгортає). Стан у `figma.clientStorage` під ключем `mistok:mini`. Розміри — `UI_SIZE` в `code.js` (open 320×316, mini 126×36). Тайтл-бар із хрестиком — хром Figma, його прибрати не можна.

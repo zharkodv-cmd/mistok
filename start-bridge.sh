@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Start (or restart) the Mistok bridge inside a detached tmux session.
-# Run from WSL: bash ~/mistok/start-bridge.sh
+# Fallback runner (tmux). On macOS the bridge runs via launchd (com.mistok.bridge);
+# use this only on Linux/WSL: bash ~/Code/mistok/start-bridge.sh
 set -e
 SESSION="mistok-bridge"
 cd "$(dirname "$0")"

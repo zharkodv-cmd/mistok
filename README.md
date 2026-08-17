@@ -12,7 +12,7 @@ Measured **150–950× faster** than browser-driven approaches: reads ~5 ms, mut
 
 The Figma Plugin API is the most stable and powerful interface Figma offers. Thousands of plugins depend on it. But typically it's only accessible *inside* Figma's UI — you click "Run plugin", code executes, results appear in a panel.
 
-Mistok 2.0 keeps a plugin permanently open in Figma and exposes its Plugin API through a local network socket. You write code in your editor / Claude / a script, it runs inside Figma, and the result comes back to you.
+Mistok keeps a plugin permanently open in Figma and exposes its Plugin API through a local network socket. You write code in your editor / Claude / a script, it runs inside Figma, and the result comes back to you.
 
 ```
 PowerShell / curl / Claude Code     bridge.py (Python)         Figma Desktop
@@ -33,10 +33,11 @@ PowerShell / curl / Claude Code     bridge.py (Python)         Figma Desktop
 
 ## Highlights
 
-- **One Python file** server + **one Python file** CLI, ~500 lines total. No npm. No frameworks.
-- **Custom Figma plugin**, ~250 lines (JS + HTML). Imported in dev mode — no publishing.
-- **15 helpers** baked into the plugin runtime as `h.*` so scripts stay short and safe (`h.bF`, `h.setText`, `h.withFonts`, `h.cloneNext`, `h.variantsOf`, …).
-- **12 high-level CLI subcommands** for common ops (`tree`, `find`, `text`, `variant`, `clone`, `rm`, `icomp`, `shot`, `spec`, `vars`, …).
+- **One Python file** server + **one Python file** CLI. No npm. No frameworks.
+- **Custom Figma plugin** (JS + HTML). Imported in dev mode — no publishing.
+- **17 helpers** baked into the plugin runtime as `h.*` so scripts stay short and safe (`h.bF`, `h.setText`, `h.withFonts`, `h.spec`, `h.varsDump`, `h.variantsOf`, …).
+- **11 high-level CLI subcommands** for common ops (`tree`, `find`, `text`, `variant`, `clone`, `rm`, `icomp`, `shot`, `spec`, `vars`, `sel`).
+- **Plugin panel with live telemetry**: selection row (⧉ copy id, 📷 PNG @2x → `~/Desktop/mistok-shots/` + system clipboard), Claude subscription limit bars, today's usage stats, color-coded log with mutation highlighting.
 - **Smart error hints** in responses — when a script fails with a known-pattern error, the response includes a `hint` field telling you how to fix it.
 - **Works while Figma is minimized.** WebSocket stays alive; JavaScript keeps executing in the background.
 - **Auto-reconnect** in the plugin UI — restart the server, plugin reconnects within 2 s.
@@ -52,6 +53,8 @@ PowerShell / curl / Claude Code     bridge.py (Python)         Figma Desktop
 ### 1. Clone the repo
 
 ```bash
+# Mistok lives locally (fork of figmosha2; upstream lacks the Mistok additions).
+# If you've pushed your own remote, clone that; the original base is:
 git clone https://github.com/denysosadchyi/figmosha2.git mistok
 cd mistok
 ```
@@ -94,15 +97,26 @@ Then import `C:\Users\<your-name>\mistok-plugin\manifest.json` in Figma.
 
 ### 4. Start the bridge
 
-```bash
-# macOS / Linux / WSL
-bash start-bridge.sh
-# starts in a detached tmux session "mistok-bridge"
+**macOS (recommended)** — launchd agent, auto-starts at login and restarts on crash:
 
+```bash
+# create ~/Library/LaunchAgents/com.mistok.bridge.plist pointing at venv/bin/python bridge.py, then:
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mistok.bridge.plist
+curl -s localhost:8787/status                              # health check
+launchctl kickstart -k gui/$(id -u)/com.mistok.bridge      # force-restart
+```
+
+**Linux / WSL** — tmux fallback:
+
+```bash
+bash start-bridge.sh          # detached tmux session "mistok-bridge"
 # OR: just run it in a terminal you keep open
 ./venv/bin/python bridge.py
+```
 
-# Windows native (no tmux)
+**Windows native** (no tmux):
+
+```powershell
 .\venv\Scripts\python bridge.py
 ```
 
@@ -141,11 +155,12 @@ If all three work — you're done.
 ### Start a session
 
 ```bash
-bash start-bridge.sh   # or however you start the bridge
-# In Figma: Plugins → Development → Mistok → Run
+# macOS: nothing to start — launchd keeps the bridge alive (survives reboot).
+# Linux/WSL: bash start-bridge.sh
+# In Figma: Plugins → Development → Mistok → Run (fastest re-run: ⌘⌥P)
 ```
 
-The bridge survives SSH disconnects and terminal closes (tmux). It does **not** survive OS reboot or WSL shutdown — restart it after either.
+On macOS the launchd agent survives OS reboot. The tmux fallback survives SSH disconnects but **not** reboot/WSL shutdown — restart it after either.
 
 ### Send code
 
@@ -184,10 +199,11 @@ python mistok shot 1:23 hero.png --scale 2  # export node as PNG to a local file
 python mistok spec 1:23 --depth 3           # compact design spec: geometry, auto-layout,
                                                  #   fills/strokes as hex or var(name), typography
 python mistok vars                          # all local variables by collection (aliases as →name)
+python mistok sel                           # current selection in Figma (ids, names, sizes)
 python mistok status                        # bridge + plugin connection state
 ```
 
-`spec` and `vars` print **compact single-line JSON** — designed for AI agents that pay per token. `shot` decodes the PNG locally, so no base64 ever hits your terminal.
+`spec`, `vars`, and `sel` print **compact single-line JSON** — designed for AI agents that pay per token. `shot` decodes the PNG locally, so no base64 ever hits your terminal.
 
 ## Code conventions
 
@@ -249,7 +265,7 @@ Currently hints cover: fills/strokes variable binding, frozen arrays, missing ma
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `connection refused` from CLI | Server not running | `bash start-bridge.sh` (or run `bridge.py` in a terminal) |
+| `connection refused` from CLI | Server not running | macOS: `launchctl kickstart -k gui/$(id -u)/com.mistok.bridge`; other OS: `bash start-bridge.sh` |
 | `plugin not connected` (503) | Plugin window closed | Plugins → Development → Mistok → Run |
 | Plugin says `disconnected, retrying…` | Server is down or restarting | Start it; plugin auto-reconnects within 2 s |
 | 504 timeout | Code threw silently or `await` never resolved | Close the plugin (X), Run again. Increase `--timeout` for legitimately long ops |
@@ -262,16 +278,23 @@ Currently hints cover: fills/strokes variable binding, frozen arrays, missing ma
 ## Project layout
 
 ```
-bridge.py              HTTP/WS server (~200 lines)
-mistok            CLI client (~300 lines)
-start-bridge.sh        tmux-based bridge management
+bridge.py              HTTP/WS server + Claude usage/limits telemetry + shot file-save
+mistok                 CLI client (13 subcommands)
+start-bridge.sh        tmux fallback runner (macOS uses launchd: com.mistok.bridge)
+rule-template.md       Template rule for wiring Mistok into a Claude Code project
 plugin/
   manifest.json        Permissions + allowed origins
-  code.js              Plugin sandbox: exec + helpers
-  ui.html              WS client + auto-reconnect + log panel
+  code.js              Plugin sandbox: exec + 17 h.* helpers + selection/export
+  ui.html              WS client, selection row (⧉/📷), limit bars, stats, colored log
+projects/              Per-project design conventions (<name>.md)
+archive/               Retired one-off scripts and data snapshots
 CLAUDE.md              Conventions for Claude Code sessions driving Mistok
 README.md              This file
 ```
+
+### Plugin panel
+
+The plugin window shows, top to bottom: Claude subscription limit bars (session / weekly, red as you approach the cap, `figma.notify` warning past 80%), the current selection (node id with **⧉** copy and **📷** export — PNG @2x saved to `~/Desktop/mistok-shots/` *and* placed on the system clipboard for instant ⌘V), today's Claude usage (session duration, project, messages, tokens — pushed by the bridge every 60 s from `~/.claude` transcripts), and a color-coded log where write-looking code is tagged `[exec✎]`. The `–` button collapses everything to a tiny status pill.
 
 ## Contributing / extending
 

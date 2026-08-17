@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""mistok — CLI client for the Mistok 2.0 bridge.
+"""mistok — CLI client for the Mistok bridge.
 
 Commands:
     mistok exec "<js>"             # run arbitrary JS in plugin context
@@ -28,6 +28,7 @@ Helpers available inside exec'd code (as `h.*`):
     h.variant(instance, props)  h.variantsOf(instance)
     h.node(id)                  h.var_(id)
     h.importComp(key)           h.importVar(key)
+    h.spec(node, {maxDepth})    h.varsDump()
 """
 
 import argparse
