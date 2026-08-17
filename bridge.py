@@ -169,6 +169,56 @@ def _claude_usage():
     return data
 
 
+CHAT_BUSY = False
+
+
+async def run_chat(ws: web.WebSocketResponse, text: str):
+    """Headless Claude Code turn triggered from the plugin's chat input."""
+    global CHAT_BUSY
+    if CHAT_BUSY:
+        await ws.send_str(json.dumps({"type": "chatreply", "text": "⏳ попередній запит ще виконується"}))
+        return
+    CHAT_BUSY = True
+    try:
+        import shutil
+        env = dict(os.environ)
+        env["PATH"] = env.get("PATH", "") + ":/opt/homebrew/bin:/usr/local/bin"
+        claude = shutil.which("claude", path=env["PATH"])
+        if not claude:
+            await ws.send_str(json.dumps({"type": "chatreply", "text": "claude CLI не знайдено в PATH"}))
+            return
+        await ws.send_str(json.dumps({"type": "chatstatus", "text": "думаю…"}))
+        cwd = str(Path.home() / "Code" / "mistok")
+
+        async def attempt(extra):
+            proc = await asyncio.create_subprocess_exec(
+                claude, "-p", text, "--dangerously-skip-permissions", *extra,
+                cwd=cwd, env=env,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(), timeout=300)
+            except asyncio.TimeoutError:
+                proc.kill()
+                return None, "timeout 300s"
+            return (out.decode("utf-8", "replace").strip() or None,
+                    err.decode("utf-8", "replace").strip())
+
+        out, err = await attempt(["--continue"])
+        if out is None and err != "timeout 300s":
+            out, err = await attempt([])  # перша розмова в цьому cwd — без --continue
+        reply = out or f"(порожня відповідь{': ' + err[:300] if err else ''})"
+        await ws.send_str(json.dumps({"type": "chatreply", "text": reply[:6000]}))
+        print(f"[chat] {len(text)}b → {len(reply)}b", flush=True)
+    except Exception as e:
+        try:
+            await ws.send_str(json.dumps({"type": "chatreply", "text": f"помилка: {e}"}))
+        except Exception:
+            pass
+    finally:
+        CHAT_BUSY = False
+
+
 async def stats_pusher(ws: web.WebSocketResponse):
     """Push usage stats to the plugin UI every 60s while it's connected."""
     try:
@@ -264,6 +314,9 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                 print(f"[plugin] hello v{m.get('version', '?')}")
                 continue
             if mtype == "pong":
+                continue
+            if mtype == "chat":
+                asyncio.create_task(run_chat(ws, m.get("text") or ""))
                 continue
             if mtype == "imgrequest":
                 # запит на Magnific-генерацію — читає Claude-сесія

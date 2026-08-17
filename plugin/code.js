@@ -328,10 +328,114 @@ async function opImgRequest(roots, res) {
   res.changes.push("запит на " + slots.length + " картинок → скажи Claude: «встав картинки»");
 }
 
+// логічний auto-layout для фрейма з вільно розставленими дітьми
+function median(a) {
+  if (!a.length) return 0;
+  const s = a.slice().sort((x, y) => x - y);
+  return s[Math.floor(s.length / 2)];
+}
+
+function alApply(f, res) {
+  const all = f.children.slice();
+  // фонові шари (покривають >85% фрейма) — виводимо з потоку
+  const bg = [], kids = [];
+  for (const k of all) {
+    (k.width * k.height > f.width * f.height * 0.85 ? bg : kids).push(k);
+  }
+  if (kids.length < 2) { res.skipped.push(f.name + " (<2 елементів у потоці)"); return; }
+
+  // кластеризація в рядки за перекриттям по y
+  kids.sort((a, b) => a.y - b.y);
+  const rows = [];
+  for (const k of kids) {
+    const row = rows.find((r) => {
+      const top = Math.min(...r.map((n) => n.y));
+      const bot = Math.max(...r.map((n) => n.y + n.height));
+      const ov = Math.min(bot, k.y + k.height) - Math.max(top, k.y);
+      return ov > Math.min(k.height, bot - top) * 0.5;
+    });
+    if (row) row.push(k); else rows.push([k]);
+  }
+  rows.forEach((r) => r.sort((a, b) => a.x - b.x));
+
+  let items;
+  let dir = "VERTICAL";
+  if (rows.length === 1) {
+    dir = "HORIZONTAL";
+    items = rows[0];
+  } else {
+    items = rows.map((r) => {
+      if (r.length === 1) return r[0];
+      // багатоелементний рядок → обгортка row з HORIZONTAL AL
+      const minX = Math.min(...r.map((n) => n.x));
+      const minY = Math.min(...r.map((n) => n.y));
+      const maxX = Math.max(...r.map((n) => n.x + n.width));
+      const maxY = Math.max(...r.map((n) => n.y + n.height));
+      const wrap = figma.createFrame();
+      f.appendChild(wrap);
+      wrap.x = minX; wrap.y = minY;
+      wrap.resize(maxX - minX, maxY - minY);
+      wrap.fills = []; wrap.name = "row"; wrap.clipsContent = false;
+      const gaps = [];
+      for (let i = 1; i < r.length; i++) gaps.push(Math.max(0, r[i].x - (r[i - 1].x + r[i - 1].width)));
+      for (const n of r) { const ax = n.x - minX, ay = n.y - minY; wrap.appendChild(n); n.x = ax; n.y = ay; }
+      wrap.layoutMode = "HORIZONTAL";
+      wrap.primaryAxisSizingMode = "FIXED"; wrap.counterAxisSizingMode = "FIXED";
+      wrap.itemSpacing = Math.round(median(gaps));
+      res.changes.push(f.name + ": row×" + r.length + " gap:" + wrap.itemSpacing);
+      return wrap;
+    });
+    items.sort((a, b) => a.y - b.y);
+  }
+
+  // порядок дітей = візуальний порядок (AL стекає за індексом)
+  items.forEach((n, i) => f.insertChild(i, n));
+
+  const minX = Math.min(...items.map((n) => n.x));
+  const minY = Math.min(...items.map((n) => n.y));
+  const maxX = Math.max(...items.map((n) => n.x + n.width));
+  const maxY = Math.max(...items.map((n) => n.y + n.height));
+  const gaps = [];
+  for (let i = 1; i < items.length; i++) {
+    gaps.push(Math.max(0, dir === "VERTICAL"
+      ? items[i].y - (items[i - 1].y + items[i - 1].height)
+      : items[i].x - (items[i - 1].x + items[i - 1].width)));
+  }
+
+  f.layoutMode = dir;
+  f.primaryAxisSizingMode = "FIXED"; f.counterAxisSizingMode = "FIXED";
+  f.itemSpacing = Math.round(median(gaps));
+  f.paddingLeft = Math.max(0, Math.round(minX));
+  f.paddingTop = Math.max(0, Math.round(minY));
+  f.paddingRight = Math.max(0, Math.round(f.width - maxX));
+  f.paddingBottom = Math.max(0, Math.round(f.height - maxY));
+
+  for (const b of bg) { b.layoutPositioning = "ABSOLUTE"; res.changes.push(b.name + " → absolute (фон)"); }
+  res.changes.push(f.name + ": " + dir + " gap:" + f.itemSpacing +
+    " pad:" + [f.paddingTop, f.paddingRight, f.paddingBottom, f.paddingLeft].join(","));
+}
+
+async function opAutoLayout(roots, res) {
+  const targets = [];
+  for (const root of roots) {
+    if (root.type === "FRAME" && (!root.layoutMode || root.layoutMode === "NONE") && root.children.length > 1) {
+      targets.push(root);
+    } else if (root.type === "SECTION" || (root.type === "FRAME" && root.layoutMode !== "NONE")) {
+      for (const c of root.children) {
+        if (c.type === "FRAME" && (!c.layoutMode || c.layoutMode === "NONE") && c.children.length > 1) targets.push(c);
+      }
+    }
+  }
+  if (!targets.length) throw new Error("нема фреймів без auto-layout з 2+ дітьми");
+  for (const f of targets) alApply(f, res);
+}
+
 const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor,
-  textstyle: opTextStyles, sectionize: opSectionize, imgreuse: opImgReuse, imggen: opImgRequest };
+  textstyle: opTextStyles, sectionize: opSectionize, imgreuse: opImgReuse, imggen: opImgRequest,
+  autolayout: opAutoLayout };
 const OP_NAMES = { clean: "Clean", rename: "Rename", varsal: "AL→vars", varscolor: "Colors→vars",
-  textstyle: "Text styles", sectionize: "Sectionize", imgreuse: "Img reuse", imggen: "Magnific request" };
+  textstyle: "Text styles", sectionize: "Sectionize", imgreuse: "Img reuse", imggen: "Magnific request",
+  autolayout: "Auto-layout" };
 
 function safeStringify(value) {
   if (value === undefined) return null;

@@ -117,13 +117,40 @@
   .lim .fill.warn { background: var(--pend); }
   .lim .fill.hot { background: var(--err); }
 
+  #chatOut {
+    display: none; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 8px; font-size: 10.5px; line-height: 1.5;
+    max-height: 180px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+    color: var(--text); flex: none;
+  }
+  #chatOut.open { display: block; }
+  #chatOut.thinking { color: var(--muted); font-style: italic; }
+  #chatRow { flex: none; }
+  #chatIn {
+    width: 100%; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 11px; padding: 6px 8px;
+    font-family: inherit;
+  }
+  #chatIn:focus { outline: none; border-color: rgba(125,211,252,.4); }
+  #chatIn::placeholder { color: var(--dim); }
+
+  /* миттєвий тултіп: коротка назва дії */
+  [data-tip] { position: relative; }
+  [data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute; bottom: calc(100% + 5px); left: 50%; transform: translateX(-50%);
+    background: #0c0c0e; color: var(--text); font-size: 9.5px; line-height: 1;
+    padding: 4px 7px; border-radius: 4px; border: 1px solid var(--border);
+    white-space: nowrap; pointer-events: none; z-index: 10;
+  }
+
   /* згорнутий режим — темна пігулка */
   body.mini { padding: 0; cursor: pointer; display: block; }
   body.mini .row { margin: 0; height: 36px; padding: 0 10px; gap: 6px; }
   body.mini:hover { background: var(--panel); }
   body.mini #server, body.mini #status, body.mini #count,
   body.mini #stats, body.mini #summary, body.mini #limits, body.mini #sel,
-  body.mini #ops, body.mini #secform { display: none; }
+  body.mini #ops, body.mini #secform, body.mini #chatOut, body.mini #chatRow { display: none; }
   body.mini #brand { display: inline; color: var(--muted); }
 </style>
 </head>
@@ -145,6 +172,10 @@
   </div>
   <div id="stats">очікую статистику…</div>
   <div id="summary"></div>
+  <div id="chatOut"></div>
+  <div id="chatRow">
+    <input id="chatIn" type="text" placeholder="Спитай Claude… (Enter)">
+  </div>
 
 <script>
 const SERVER = "ws://localhost:8787/plugin";
@@ -266,6 +297,10 @@ function connect() {
       parent.postMessage({ pluginMessage: { type: "exec", id: msg.id, code: msg.code } }, "*");
     } else if (msg.type === "stats") {
       renderStats(msg);
+    } else if (msg.type === "chatstatus") {
+      chatShow(msg.text, true);
+    } else if (msg.type === "chatreply") {
+      chatShow(msg.text, false);
     } else if (msg.type === "ping") {
       try { ws.send(JSON.stringify({ type: "pong" })); } catch (e) {}
     }
@@ -282,6 +317,25 @@ function connect() {
     reconnectTimer = setTimeout(connect, 2000);
   };
 }
+
+// ── чат із Claude (headless через bridge) ────────────────────────────────
+const chatOut = document.getElementById("chatOut");
+const chatIn = document.getElementById("chatIn");
+function chatShow(text, thinking) {
+  chatOut.textContent = text || "";
+  chatOut.classList.toggle("open", !!text);
+  chatOut.classList.toggle("thinking", !!thinking);
+  fitHeight();
+}
+chatIn.onkeydown = (e) => {
+  if (e.key !== "Enter") return;
+  const text = chatIn.value.trim();
+  if (!text) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) { chatShow("bridge не підключений", false); return; }
+  ws.send(JSON.stringify({ type: "chat", text }));
+  chatIn.value = "";
+  chatShow("думаю…", true);
+};
 
 // ── selection row ────────────────────────────────────────────────────────
 function escHtml(s) {
@@ -311,27 +365,30 @@ const ICONS = {
   sectionize: I('<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/>'),
   imgreuse: I('<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="6" cy="6.5" r="1"/><path d="M2.5 11l3-3 2.5 2.5L11 7.5l2.5 2.5"/>'),
   imggen: I('<path d="M8 2.5l1.2 3.3L12.5 7 9.2 8.2 8 11.5 6.8 8.2 3.5 7l3.3-1.2L8 2.5z"/><path d="M12.5 11l.5 1.2 1.2.5-1.2.5-.5 1.2-.5-1.2-1.2-.5 1.2-.5.5-1.2z"/>'),
+  autolayout: I('<rect x="3.5" y="2.5" width="9" height="4.5" rx="1"/><rect x="3.5" y="9" width="9" height="4.5" rx="1"/>'),
   copy: I('<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 00-1.5-1.5H4A1.5 1.5 0 002.5 3v5A1.5 1.5 0 004 9.5h.5"/>'),
   shot: I('<path d="M2.5 5.8A1.3 1.3 0 013.8 4.5h1.4l1-1.5h3.6l1 1.5h1.4a1.3 1.3 0 011.3 1.3v6.4a1.3 1.3 0 01-1.3 1.3H3.8a1.3 1.3 0 01-1.3-1.3V5.8z"/><circle cx="8" cy="8.8" r="2.3"/>'),
   ok: '<span style="color:var(--ok)">✓</span>',
   wait: "⏳",
 };
 const OP_BTNS = [
-  { kind: "clean", title: "Clean: цілі px + відступи/гапи → найближчі variables" },
-  { kind: "rename", title: "Rename: дефолтні Frame N за вмістом, розгрупувати Group N" },
-  { kind: "varsal", title: "Auto-layout відступи/гапи → найближчі variables" },
-  { kind: "varscolor", title: "Кольори/текст → найближчі variables" },
-  { kind: "textstyle", title: "Текстові ноди → локальні Text Styles (family+style+size)" },
-  { kind: "sectionize", title: "Загорнути виділене в Section і розкласти (pad/gap нижче)" },
-  { kind: "imgreuse", title: "Плейсхолдери ← картинки, що вже використовуються на сторінці" },
-  { kind: "imggen", title: "Запит на преміум-картинки через Magnific → виконує Claude" },
+  { kind: "clean", tip: "Clean", title: "Цілі px + відступи/гапи → найближчі variables" },
+  { kind: "rename", tip: "Rename", title: "Дефолтні Frame N за вмістом, розгрупувати Group N" },
+  { kind: "varsal", tip: "Spacing", title: "Auto-layout відступи/гапи → найближчі variables" },
+  { kind: "varscolor", tip: "Colors", title: "Кольори/текст → найближчі variables" },
+  { kind: "textstyle", tip: "Styles", title: "Текстові ноди → локальні Text Styles (family+style+size)" },
+  { kind: "autolayout", tip: "Layout", title: "Логічно організувати вільні елементи фрейма в auto-layout (рядки/колонки, фон → absolute)" },
+  { kind: "sectionize", tip: "Section", title: "Загорнути виділене в Section і розкласти (pad/gap нижче)" },
+  { kind: "imgreuse", tip: "Reuse", title: "Плейсхолдери ← картинки, що вже використовуються на сторінці" },
+  { kind: "imggen", tip: "Magnific", title: "Запит на преміум-картинки через Magnific → виконує Claude" },
 ];
 function renderOps(show) {
   const el = document.getElementById("ops");
   const form = document.getElementById("secform");
   if (!show) { el.innerHTML = ""; form.classList.remove("open"); return; }
   el.innerHTML = OP_BTNS.map((b) =>
-    '<button data-kind="' + b.kind + '" title="' + b.title + '">' + ICONS[b.kind] + "</button>").join("");
+    '<button data-kind="' + b.kind + '" data-tip="' + b.tip + '" title="' + b.title + '">' +
+    ICONS[b.kind] + "</button>").join("");
   el.querySelectorAll("button").forEach((btn) => {
     btn.onclick = (e) => {
       e.stopPropagation();
@@ -364,8 +421,8 @@ function renderSel(m) {
     '<span class="selid">' + escHtml(n.id) + "</span>" +
     '<span class="selname">' + escHtml(n.name) + "</span>" +
     '<span class="selmeta">' + n.w + "×" + n.h + more + "</span>" +
-    '<button id="copySel" title="Copy node id">' + ICONS.copy + "</button>" +
-    '<button id="shotSel" title="PNG @2x → буфер + Desktop/mistok-shots">' + ICONS.shot + "</button>";
+    '<button id="copySel" data-tip="Copy id" title="Copy node id">' + ICONS.copy + "</button>" +
+    '<button id="shotSel" data-tip="Shot" title="PNG @2x → буфер + Desktop/mistok-shots">' + ICONS.shot + "</button>";
   const copyBtn = document.getElementById("copySel");
   copyBtn.onclick = (e) => {
     e.stopPropagation();
