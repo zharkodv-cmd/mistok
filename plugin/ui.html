@@ -127,7 +127,9 @@
     border-radius: 6px; color: var(--text); font-size: 11px; padding: 6px 8px;
     font-family: inherit;
   }
-  #chatMeta { flex: none; display: flex; gap: 5px; margin-top: -2px; }
+  #chatMeta { flex: none; display: flex; gap: 4px; align-items: center; margin-top: -2px; }
+  #chatMeta .mlabel { font-size: 9px; color: var(--dim); }
+  #chatMeta select + .mlabel { margin-left: 8px; }
   #chatMeta select {
     background: transparent; border: none; color: var(--dim); font-size: 10px;
     padding: 0; font-family: ui-monospace, monospace; cursor: pointer;
@@ -203,18 +205,20 @@
     <input id="chatIn" type="text" placeholder="Спитай Claude… (Enter)">
   </div>
   <div id="chatMeta">
+    <span class="mlabel">✦</span>
     <select id="mSel" title="Модель для чат-задач">
-      <option value="">✦ авто</option>
-      <option value="haiku">✦ haiku</option>
-      <option value="sonnet">✦ sonnet</option>
-      <option value="opus">✦ opus</option>
-      <option value="claude-fable-5">✦ fable</option>
+      <option value="">авто</option>
+      <option value="haiku">haiku</option>
+      <option value="sonnet">sonnet</option>
+      <option value="opus">opus</option>
+      <option value="claude-fable-5">fable</option>
     </select>
+    <span class="mlabel">⚡</span>
     <select id="eSel" title="Effort для чат-задач">
-      <option value="">⚡ авто</option>
-      <option value="low">⚡ low</option>
-      <option value="medium">⚡ medium</option>
-      <option value="high">⚡ high</option>
+      <option value="">авто</option>
+      <option value="low">low</option>
+      <option value="medium">medium</option>
+      <option value="high">high</option>
     </select>
   </div>
 
