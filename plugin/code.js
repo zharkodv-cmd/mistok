@@ -164,7 +164,7 @@ async function opClean(roots, res) {
 }
 
 async function opRename(roots, res) {
-  const DEFAULT_RE = /^(Frame|Group|Rectangle|Ellipse|Polygon|Star|Line|Arrow|Vector|Section) \d+$/;
+  const DEFAULT_RE = /^(Frame|Group|Rectangle|Ellipse|Polygon|Star|Line|Arrow|Vector|Section)( \d+)?$/;
   // розгрупування: GROUP з дефолтною назвою, найглибші перші (ungroup зберігає дітей)
   const groups = [];
   for (const n of walkAll(roots)) {
@@ -187,8 +187,41 @@ async function opRename(roots, res) {
   }
 }
 
-const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor };
-const OP_NAMES = { clean: "Clean", rename: "Rename", varsal: "AL→vars", varscolor: "Colors→vars" };
+// текстові ноди → локальні Text Styles (збіг family+style+size, уточнення за lineHeight)
+async function opTextStyles(roots, res) {
+  const styles = await figma.getLocalTextStylesAsync();
+  for (const n of walkAll(roots)) {
+    if (n.type !== "TEXT") continue;
+    if (n.textStyleId) continue; // вже зі стилем
+    if (typeof n.fontName === "symbol" || typeof n.fontSize === "symbol") {
+      res.skipped.push(n.name + " (mixed font)");
+      continue;
+    }
+    const cand = styles.filter((s) =>
+      s.fontName.family === n.fontName.family &&
+      s.fontName.style === n.fontName.style &&
+      s.fontSize === n.fontSize);
+    if (!cand.length) {
+      res.skipped.push(n.name + " (" + n.fontName.family + " " + n.fontName.style + " " + n.fontSize + ")");
+      continue;
+    }
+    let best = cand[0];
+    if (cand.length > 1 && typeof n.lineHeight !== "symbol") {
+      const lh = JSON.stringify(n.lineHeight);
+      best = cand.find((s) => JSON.stringify(s.lineHeight) === lh) || cand[0];
+    }
+    try {
+      await figma.loadFontAsync(best.fontName);
+      await n.setTextStyleIdAsync(best.id);
+      res.changes.push(n.name + " → " + best.name);
+    } catch (e) {
+      res.skipped.push(n.name + " (" + ((e && e.message) || e) + ")");
+    }
+  }
+}
+
+const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor, textstyle: opTextStyles };
+const OP_NAMES = { clean: "Clean", rename: "Rename", varsal: "AL→vars", varscolor: "Colors→vars", textstyle: "Text styles" };
 
 function safeStringify(value) {
   if (value === undefined) return null;
