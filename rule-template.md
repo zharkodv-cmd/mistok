@@ -52,10 +52,10 @@ The button writes `/tmp/mistok-redesign-request.json` (section spec + instructio
 
 Кнопка пише запит у `/tmp/mistok-prototype-request.json` (spec джерела + інструкція). Коли користувач каже «зроби прототип»: прочитай запит; якщо джерело — бітмап (фрейм з одним IMAGE-прямокутником) — `mistok shot` і прочитай візуально; збери поруч із джерелом сучасний мінімалістичний прототип: Inter (Regular/Medium/Semi Bold — саме «Semi Bold» з пробілом), чорно-біло-сірий (#111/#6B6B6B/#F0F0F0/#E5E5E5), повний auto-layout, ВСІ тексти і логіка джерела. Після виконання видали файл запиту.
 
-## Design from prototype (◆ button)
+## Recreate (◆ Design button)
 
-Writes `/tmp/mistok-design-request.json`. On «build the design»: FIRST load the `impeccable` skill (Skill tool), read the request; build a full award-grade design NEXT TO the prototype using the file's variables (respect scopes), text styles and assets; brand register, bold committed direction, no AI slop; 1 polished variant + short design notes. Delete the request file when done.
+Writes `/tmp/mistok-design-request.json`. On «recreate the design»: the source is a screenshot (frame with an IMAGE fill). mistok shot it at scale 1–2 and read carefully; rebuild NEXT TO it as 1:1 editable layers: exact geometry, colors sampled from the image (bind to variables only on exact/near match), real TEXT nodes with matching size/weight/line-height (project fonts or Inter), fills/borders/radii/shadows as seen. Finish with a side-by-side shot comparison and fix deltas. Delete the request file.
 
 ## Redesign — addendum
 
-The source may be a bitmap screenshot/sketch (frame with one IMAGE rectangle) — mistok shot it and read visually first. Spacing/scale/composition come from the REFERENCE by eye (never copy the source paddings); only colors/type/assets from our file. Finish with impeccable-grade craft.
+Applies to ANY selection (group, text block, section, page frame). The source may be a bitmap screenshot/sketch (frame with one IMAGE rectangle) — mistok shot it and read visually first. Spacing/scale/composition come from the REFERENCE by eye (never copy the source paddings); only colors/type/assets from our file. Finish with impeccable-grade craft.
