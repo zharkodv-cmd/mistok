@@ -46,11 +46,6 @@
   #toggle:hover, #undoBtn:hover { background: var(--panel); color: var(--text); }
   body.mini #undoBtn { display: none; }
 
-  #stats {
-    font-family: ui-monospace, monospace; font-size: 10px; color: var(--muted);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none;
-  }
-  #stats b { color: var(--text); font-weight: 500; }
   #summary {
     font-size: 10px; color: var(--dim); font-style: italic; flex: none;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -132,12 +127,14 @@
     border-radius: 6px; color: var(--text); font-size: 11px; padding: 6px 8px;
     font-family: inherit;
   }
-  #chatRow select {
-    flex: none; background: var(--panel); border: 1px solid var(--border);
-    border-radius: 6px; color: var(--muted); font-size: 10px; padding: 0 4px;
-    font-family: ui-monospace, monospace; max-width: 92px;
+  #chatMeta { flex: none; display: flex; gap: 5px; margin-top: -2px; }
+  #chatMeta select {
+    background: transparent; border: none; color: var(--dim); font-size: 10px;
+    padding: 0; font-family: ui-monospace, monospace; cursor: pointer;
+    -webkit-appearance: none; appearance: none;
   }
-  #chatRow select:focus { outline: none; border-color: rgba(125,211,252,.4); }
+  #chatMeta select:hover, #chatMeta select:focus { color: var(--text); outline: none; }
+  body.mini #chatMeta { display: none; }
   #chatIn:focus { outline: none; border-color: rgba(125,211,252,.4); }
   #chatIn::placeholder { color: var(--dim); }
 
@@ -176,7 +173,7 @@
   body.mini .row { margin: 0; height: 36px; padding: 0 10px; gap: 6px; }
   body.mini:hover { background: var(--panel); }
   body.mini #server, body.mini #status, body.mini #count,
-  body.mini #stats, body.mini #summary, body.mini #limits, body.mini #sel,
+  body.mini body.mini #summary, body.mini #limits, body.mini #sel,
   body.mini #ops, body.mini #secform, body.mini #chatOut, body.mini #chatRow { display: none; }
   body.mini #brand { display: inline; color: var(--muted); }
 </style>
@@ -200,23 +197,24 @@
     <label>gap <input id="secGap" type="number" value="100"></label>
     <button id="secApply" title="Загорнути в секцію і розкласти">→ Section</button>
   </div>
-  <div id="stats">очікую статистику…</div>
   <div id="summary"></div>
   <div id="chatOut"></div>
   <div id="chatRow">
     <input id="chatIn" type="text" placeholder="Спитай Claude… (Enter)">
+  </div>
+  <div id="chatMeta">
     <select id="mSel" title="Модель для чат-задач">
-      <option value="">model: авто</option>
-      <option value="haiku">haiku</option>
-      <option value="sonnet">sonnet</option>
-      <option value="opus">opus</option>
-      <option value="claude-fable-5">fable</option>
+      <option value="">✦ авто</option>
+      <option value="haiku">✦ haiku</option>
+      <option value="sonnet">✦ sonnet</option>
+      <option value="opus">✦ opus</option>
+      <option value="claude-fable-5">✦ fable</option>
     </select>
     <select id="eSel" title="Effort для чат-задач">
-      <option value="">effort: авто</option>
-      <option value="low">low</option>
-      <option value="medium">medium</option>
-      <option value="high">high</option>
+      <option value="">⚡ авто</option>
+      <option value="low">⚡ low</option>
+      <option value="medium">⚡ medium</option>
+      <option value="high">⚡ high</option>
     </select>
   </div>
 
@@ -278,16 +276,6 @@ function endTask(key) { if (activeTasks.delete(key)) renderTasks(); }
 function busy() {}
 
 // ── Claude usage stats (pushed by bridge every 60s) ─────────────────────
-function fmtTok(n) {
-  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
-  if (n >= 1e3) return Math.round(n / 1e3) + "k";
-  return String(n);
-}
-function fmtMin(m) {
-  if (m == null) return null;
-  const h = Math.floor(m / 60);
-  return h ? h + "год " + (m % 60) + "хв" : m + "хв";
-}
 function fmtReset(iso) {
   if (!iso) return "";
   const ms = new Date(iso) - Date.now();
@@ -301,13 +289,6 @@ const LIM_NAMES = { session: "Сесія", weekly_all: "Тиждень" };
 const limNotified = {};
 function renderStats(s) {
   const c = s.claude || {};
-  const parts = [];
-  const dur = fmtMin(c.session_min);
-  if (dur) parts.push("⏱ " + dur);
-  if (c.project) parts.push("<b>" + c.project + "</b>");
-  parts.push("сьогодні: <b>" + (c.msgs || 0) + "</b> msg");
-  parts.push("↑" + fmtTok(c.in_tok || 0) + " ↓" + fmtTok(c.out_tok || 0));
-  document.getElementById("stats").innerHTML = parts.join(" · ");
   document.getElementById("summary").textContent = c.summary || "";
 
   if (s.execs != null) {
