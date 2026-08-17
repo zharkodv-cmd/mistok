@@ -327,14 +327,21 @@ async function opSectionize(roots, res, params) {
   }
 
   items.sort((a, b) => a.y - b.y || a.x - b.x);
-  let y = pad, maxW = 0;
-  for (const n of items) {
-    n.x = pad; n.y = y;
-    y += n.height + gap;
-    maxW = Math.max(maxW, n.width);
-    res.changes.push(n.name + " → x:" + pad + " y:" + Math.round(n.y));
+  const cols = Math.max(1, Number(params && params.cols) || 1);
+  let y = pad, maxRight = 0;
+  for (let r = 0; r < items.length; r += cols) {
+    const rowItems = items.slice(r, r + cols);
+    const rowH = Math.max(...rowItems.map((n) => n.height));
+    let x = pad;
+    for (const n of rowItems) {
+      n.x = x; n.y = y;
+      res.changes.push(n.name + " → x:" + Math.round(x) + " y:" + Math.round(y));
+      x += n.width + gap;
+    }
+    maxRight = Math.max(maxRight, x - gap);
+    y += rowH + gap;
   }
-  section.resizeWithoutConstraints(maxW + pad * 2, y - gap + pad);
+  section.resizeWithoutConstraints(maxRight + pad, y - gap + pad);
   res.changes.push("section " + Math.round(section.width) + "×" + Math.round(section.height) +
     " (pad " + pad + ", gap " + gap + ")");
 }

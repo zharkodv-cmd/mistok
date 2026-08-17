@@ -197,6 +197,7 @@
   <div id="secform">
     <label>pad <input id="secPad" type="number" value="250"></label>
     <label>gap <input id="secGap" type="number" value="100"></label>
+    <label>cols <input id="secCols" type="number" value="1" min="1"></label>
     <button id="secApply" title="Wrap into a section and lay out">→ Section</button>
   </div>
   <div id="summary"></div>
@@ -500,6 +501,7 @@ document.getElementById("secApply").onclick = (e) => {
   parent.postMessage({ pluginMessage: { type: "op", kind: "sectionize", params: {
     pad: Number(document.getElementById("secPad").value) || 250,
     gap: Number(document.getElementById("secGap").value) || 100,
+    cols: Number(document.getElementById("secCols").value) || 1,
   } } }, "*");
 };
 
