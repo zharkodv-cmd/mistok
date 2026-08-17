@@ -18,6 +18,7 @@ Commands:
     mistok vars                     # dump local variables by collection
     mistok sel                      # current selection in Figma (ids, names, sizes)
     mistok img <id> file.png        # set IMAGE fill on a node from a local file
+    mistok import <url>             # web page -> editable Figma layers (Playwright)
     mistok "<js>"                   # shorthand for `exec`
 
 Helpers available inside exec'd code (as `h.*`):
@@ -45,7 +46,7 @@ PORT = 8787
 KNOWN_CMDS = {
     "exec", "status", "tree", "find", "text", "variant",
     "clone", "rm", "import-component", "icomp",
-    "shot", "spec", "vars", "sel", "img",
+    "shot", "spec", "vars", "sel", "img", "import",
 }
 
 
@@ -304,6 +305,15 @@ def cmd_img(args):
     return _emit(_exec(code, args.timeout)[1], raw=args.raw)
 
 
+def cmd_import(args):
+    import os
+    import subprocess
+    home = os.path.dirname(os.path.realpath(__file__))
+    py = os.path.join(home, "venv", "bin", "python")
+    return subprocess.run([py, os.path.join(home, "webimport.py"), args.url,
+                           "--width", str(args.width)]).returncode
+
+
 def cmd_vars(args):
     _status, resp = _exec("return await h.varsDump();", args.timeout)
     if not resp.get("ok"):
@@ -395,6 +405,10 @@ def build_parser():
     p_sel = sub.add_parser("sel")
     _add_common_flags(p_sel)
 
+    p_imp = sub.add_parser("import")
+    p_imp.add_argument("url")
+    p_imp.add_argument("--width", type=int, default=1440)
+
     p_img = sub.add_parser("img")
     _add_common_flags(p_img)
     p_img.add_argument("node_id")
@@ -440,6 +454,7 @@ def main():
         "vars": cmd_vars,
         "sel": cmd_sel,
         "img": cmd_img,
+        "import": cmd_import,
     }
     sys.exit(dispatch[args.cmd](args))
 

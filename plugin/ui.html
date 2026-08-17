@@ -57,10 +57,10 @@
   }
   #summary:empty, #limits:empty, #sel:empty, #ops:empty { display: none; }
 
-  #ops { display: flex; gap: 5px; flex: none; }
+  #ops { display: flex; flex-wrap: wrap; gap: 5px; flex: none; }
   #ops:empty { display: none; }
   #ops button {
-    flex: 1; height: 30px; border: 1px solid var(--border); background: var(--panel);
+    flex: 1 1 calc(20% - 5px); height: 30px; border: 1px solid var(--border); background: var(--panel);
     border-radius: 6px; color: var(--muted); cursor: pointer; padding: 0;
     display: grid; place-items: center; font-size: 13px;
   }
@@ -378,6 +378,8 @@ const ICONS = {
   imgreuse: I('<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="6" cy="6.5" r="1"/><path d="M2.5 11l3-3 2.5 2.5L11 7.5l2.5 2.5"/>'),
   imggen: I('<path d="M8 2.5l1.2 3.3L12.5 7 9.2 8.2 8 11.5 6.8 8.2 3.5 7l3.3-1.2L8 2.5z"/><path d="M12.5 11l.5 1.2 1.2.5-1.2.5-.5 1.2-.5-1.2-1.2-.5 1.2-.5.5-1.2z"/>'),
   autolayout: I('<rect x="3.5" y="2.5" width="9" height="4.5" rx="1"/><rect x="3.5" y="9" width="9" height="4.5" rx="1"/>'),
+  grid: I('<path d="M5.5 2.5v11M10.5 2.5v11M2.5 5.5h11M2.5 10.5h11"/>'),
+  spell: I('<path d="M2.5 11L5.5 3.5 8.5 11M3.7 8.5h3.6"/><path d="M9.5 10.5l1.7 1.7L14 9"/>'),
   copy: I('<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 00-1.5-1.5H4A1.5 1.5 0 002.5 3v5A1.5 1.5 0 004 9.5h.5"/>'),
   shot: I('<path d="M2.5 5.8A1.3 1.3 0 013.8 4.5h1.4l1-1.5h3.6l1 1.5h1.4a1.3 1.3 0 011.3 1.3v6.4a1.3 1.3 0 01-1.3 1.3H3.8a1.3 1.3 0 01-1.3-1.3V5.8z"/><circle cx="8" cy="8.8" r="2.3"/>'),
   ok: '<span style="color:var(--ok)">✓</span>',
@@ -390,8 +392,10 @@ const OP_BTNS = [
   { kind: "textstyle", tip: "Styles", title: "Текстові ноди → локальні Text Styles (family+style+size)" },
   { kind: "autolayout", tip: "Layout", title: "Логічно організувати вільні елементи фрейма в auto-layout (рядки/колонки, фон → absolute)" },
   { kind: "sectionize", tip: "Section", title: "Загорнути виділене в Section і розкласти (pad/gap нижче)" },
-  { kind: "imgreuse", tip: "Reuse", title: "Плейсхолдери ← картинки, що вже використовуються на сторінці" },
+  { kind: "grid", tip: "Grid", title: "Вирівняти дітей по layout grid фрейма (x/w до колонок, y до 8px)" },
+  { kind: "imgreuse", tip: "Reuse", title: "Плейсхолдери ← релевантні картинки з усього файлу" },
   { kind: "imggen", tip: "Magnific", title: "Запит на преміум-картинки через Magnific → виконує Claude" },
+  { kind: "spell", tip: "Spell", title: "Вичитка всіх текстів headless-Claude'ом: помилки виправляються автоматично" },
 ];
 function renderOps(show) {
   const el = document.getElementById("ops");

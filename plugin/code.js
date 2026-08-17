@@ -547,12 +547,63 @@ async function opAutoLayout(roots, res) {
   for (const f of targets) alApply(f, res, floats);
 }
 
+// вирівнювання по сітці фрейма: x/w до колонок layout grid, y до кратності 8
+async function opGrid(roots, res) {
+  for (const root of roots) {
+    const grid = (root.layoutGrids || []).find((g) => g.pattern === "COLUMNS" && g.visible !== false);
+    if (!grid || !root.children) { res.skipped.push(root.name + " (нема COLUMNS layout grid)"); continue; }
+    const count = grid.count, gutter = grid.gutterSize || 0, offset = grid.offset || 0;
+    const colW = (root.width - offset * 2 - gutter * (count - 1)) / count;
+    const colX = (i) => offset + i * (colW + gutter);
+    const snapX = (x) => {
+      let best = colX(0), bd = Infinity;
+      for (let i = 0; i < count; i++) { const d = Math.abs(colX(i) - x); if (d < bd) { bd = d; best = colX(i); } }
+      return Math.round(best);
+    };
+    const snapW = (w) => {
+      let best = colW, bd = Infinity;
+      for (let n = 1; n <= count; n++) {
+        const cw = n * colW + (n - 1) * gutter;
+        const d = Math.abs(cw - w);
+        if (d < bd) { bd = d; best = cw; }
+      }
+      return Math.round(best);
+    };
+    for (const n of root.children) {
+      if (typeof n.x !== "number") continue;
+      const nx = snapX(n.x), ny = Math.round(n.y / 8) * 8;
+      const nw = typeof n.resize === "function" && n.type !== "TEXT" ? snapW(n.width) : null;
+      const moved = Math.abs(nx - n.x) > 0.5 || Math.abs(ny - n.y) > 0.5;
+      const sized = nw !== null && Math.abs(nw - n.width) > 0.5;
+      if (moved) { n.x = nx; n.y = ny; }
+      if (sized) { try { n.resize(nw, n.height); } catch (e) {} }
+      if (moved || sized) res.changes.push(n.name + " → x:" + nx + (sized ? " w:" + nw : ""));
+    }
+  }
+  if (!res.changes.length && !res.skipped.length) res.skipped.push("нічого вирівнювати");
+}
+
+// збір текстів на вичитку — виконує headless Claude через bridge
+async function opSpell(roots, res) {
+  const texts = [];
+  for (const n of walkAll(roots)) {
+    if (n.type !== "TEXT") continue;
+    const s = n.characters;
+    if (s && s.trim().length >= 2) texts.push({ id: n.id, text: s.slice(0, 500) });
+    if (texts.length >= 120) break;
+  }
+  if (!texts.length) throw new Error("у виділеному немає текстів");
+  res.request = null; // не Magnific-запит
+  res.spell = { texts };
+  res.changes.push("на вичитку: " + texts.length + " текстів → Claude працює у фоні");
+}
+
 const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor,
   textstyle: opTextStyles, sectionize: opSectionize, imgreuse: opImgReuse, imggen: opImgRequest,
-  autolayout: opAutoLayout };
+  autolayout: opAutoLayout, grid: opGrid, spell: opSpell };
 const OP_NAMES = { clean: "Clean", rename: "Rename", varsal: "AL→vars", varscolor: "Colors→vars",
   textstyle: "Text styles", sectionize: "Sectionize", imgreuse: "Img reuse", imggen: "Magnific request",
-  autolayout: "Auto-layout" };
+  autolayout: "Auto-layout", grid: "Grid snap", spell: "Spellcheck" };
 
 function safeStringify(value) {
   if (value === undefined) return null;
@@ -842,6 +893,7 @@ figma.ui.onmessage = async (msg) => {
         changes: res.changes.slice(0, 80), skipped: res.skipped.slice(0, 80),
       });
       if (res.request) figma.ui.postMessage({ type: "imgrequest", request: res.request });
+      if (res.spell) figma.ui.postMessage({ type: "spellrequest", texts: res.spell.texts });
       figma.commitUndo(); // кожна операція = окремий крок undo
     } catch (e) {
       figma.notify("Помилка " + OP_NAMES[msg.kind] + ": " + ((e && e.message) || e));

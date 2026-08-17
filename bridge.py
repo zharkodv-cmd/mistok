@@ -219,6 +219,103 @@ async def run_chat(ws: web.WebSocketResponse, text: str):
         CHAT_BUSY = False
 
 
+async def run_import(ws: web.WebSocketResponse, url: str):
+    """Веб-сторінка → редаговані шари Figma (webimport.py, Playwright)."""
+    try:
+        home = Path.home() / "Code" / "mistok"
+        py = str(home / "venv" / "bin" / "python")
+        await ws.send_str(json.dumps({"type": "chatstatus", "text": "імпортую " + url + " …"}))
+        proc = await asyncio.create_subprocess_exec(
+            py, str(home / "webimport.py"), url, cwd=str(home),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=180)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await ws.send_str(json.dumps({"type": "chatreply", "text": "імпорт: таймаут 180с"}))
+            return
+        tail = (out.decode("utf-8", "replace").strip().splitlines() or ["(порожньо)"])[-1]
+        if proc.returncode != 0:
+            tail += " | " + err.decode("utf-8", "replace").strip()[-300:]
+        await ws.send_str(json.dumps({"type": "chatreply", "text": tail[:1500]}))
+        print(f"[import] {url} → rc={proc.returncode}", flush=True)
+    except Exception as e:
+        print(f"[import] failed: {e}", flush=True)
+
+
+async def run_spell(ws: web.WebSocketResponse, texts: list):
+    """Вичитка текстів headless-Claude'ом і автозастосування виправлень."""
+    try:
+        import shutil
+        env = dict(os.environ)
+        env["PATH"] = env.get("PATH", "") + ":/opt/homebrew/bin:/usr/local/bin"
+        claude = shutil.which("claude", path=env["PATH"])
+        if not claude:
+            return
+        prompt = (
+            "Ти коректор. Виправ орфографічні, граматичні й пунктуаційні помилки в текстах нижче. "
+            "Мову кожного тексту зберігай (українська лишається українською, англійська англійською). "
+            "Зміст, тон і довжину не міняй — тільки помилки. "
+            "Поверни ВИКЛЮЧНО JSON-масив виправлень без пояснень, тільки для текстів зі змінами: "
+            '[{"id":"<id>","fixed":"<виправлений текст>"}]. Якщо помилок немає — поверни []. '
+            "Тексти: " + json.dumps(texts, ensure_ascii=False)
+        )
+        proc = await asyncio.create_subprocess_exec(
+            claude, "-p", prompt, "--model", "haiku", "--dangerously-skip-permissions",
+            cwd=str(Path.home()), env=env,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            out, _err = await asyncio.wait_for(proc.communicate(), timeout=240)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await ws.send_str(json.dumps({"type": "chatreply", "text": "Вичитка: таймаут"}))
+            return
+        raw = out.decode("utf-8", "replace")
+        start, end = raw.find("["), raw.rfind("]")
+        fixes = []
+        if start != -1 and end > start:
+            try:
+                fixes = [f for f in json.loads(raw[start:end + 1])
+                         if isinstance(f, dict) and f.get("id") and isinstance(f.get("fixed"), str)]
+            except json.JSONDecodeError:
+                pass
+        if not fixes:
+            await ws.send_str(json.dumps({"type": "chatreply", "text": "Вичитка: помилок не знайдено ✓"}))
+            print("[spell] no fixes", flush=True)
+            return
+        code = (
+            f"const FIX = {json.dumps(fixes, ensure_ascii=False)};"
+            "let ok = 0; const miss = [];"
+            "for (const f of FIX) {"
+            "  const n = await figma.getNodeByIdAsync(f.id);"
+            "  if (!n || n.type !== 'TEXT') { miss.push(f.id); continue; }"
+            "  try { await h.setText(n, f.fixed); ok++; } catch (e) { miss.push(f.id); }"
+            "}"
+            "figma.commitUndo();"
+            "figma.notify('Вичитка: ' + ok + ' виправлень' + (miss.length ? ', ' + miss.length + ' пропущено' : ''));"
+            "return { ok, missed: miss.length };"
+        )
+        # синхронний urllib у to_thread — інакше дедлок із власним event loop
+        req = await asyncio.to_thread(
+            urllib_request_json, "http://127.0.0.1:8787/exec", {"code": code, "timeout": 60})
+        n_ok = (req.get("value") or {}).get("ok", 0)
+        await ws.send_str(json.dumps({"type": "chatreply",
+                                      "text": f"Вичитка: {n_ok} виправлень із {len(fixes)} запропонованих"}))
+        print(f"[spell] applied {n_ok}/{len(fixes)}", flush=True)
+    except Exception as e:
+        print(f"[spell] failed: {e}", flush=True)
+
+
+def urllib_request_json(url, payload):
+    import urllib.request
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=70) as r:
+        return json.loads(r.read())
+
+
 async def stats_pusher(ws: web.WebSocketResponse):
     """Push usage stats to the plugin UI every 60s while it's connected."""
     try:
@@ -316,7 +413,14 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
             if mtype == "pong":
                 continue
             if mtype == "chat":
-                asyncio.create_task(run_chat(ws, m.get("text") or ""))
+                text = (m.get("text") or "").strip()
+                if text.startswith(("http://", "https://")) and " " not in text:
+                    asyncio.create_task(run_import(ws, text))  # лінк = веб-імпорт
+                else:
+                    asyncio.create_task(run_chat(ws, text))
+                continue
+            if mtype == "spellrequest":
+                asyncio.create_task(run_spell(ws, m.get("texts") or []))
                 continue
             if mtype == "imgrequest":
                 # запит на Magnific-генерацію — читає Claude-сесія
