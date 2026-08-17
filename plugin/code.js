@@ -215,8 +215,7 @@ async function opClean(roots, res) {
 }
 
 async function opRename(roots, res) {
-  // дефолтні імена: "Frame 12", "frame13123132312", "Group", "union 3", …
-  const DEFAULT_RE = /^(frame|group|rectangle|ellipse|polygon|star|line|arrow|vector|section|union|subtract|intersect|exclude)\s*\d*$/i;
+  const DEFAULT_RE = DEFAULT_NAME_RE;
   // розгрупування: GROUP з дефолтною назвою, найглибші перші (ungroup зберігає дітей)
   const groups = [];
   for (const n of walkAll(roots)) {
@@ -348,6 +347,8 @@ async function opSectionize(roots, res, params) {
 
 // плейсхолдери під картинки: за іменем або сірий прямокутник без дітей
 const PH_RE = /^(ph|img|image|photo|picture|placeholder|rectangle)/i;
+// дефолтні імена шарів: "Frame 12", "frame13123132312", "Group", "union 3", …
+const DEFAULT_NAME_RE = /^(frame|group|rectangle|ellipse|polygon|star|line|arrow|vector|section|union|subtract|intersect|exclude)\s*\d*$/i;
 function findImageSlots(roots) {
   const slots = [];
   for (const n of walkAll(roots)) {
@@ -660,13 +661,134 @@ async function opPrototype(roots, res) {
   res.changes.push("prototype request \"" + root.name + "\" → tell Claude: \"build the prototype\"");
 }
 
+
+// ── Lint: read-only аудит виділеного — що ще не приведено до системи ─────
+async function opLint(roots, res) {
+  const floats = await floatVarList();
+  const colors = await colorVarList();
+  const styles = await figma.getLocalTextStylesAsync();
+  const counts = { colors: 0, spacing: 0, textstyles: 0, names: 0, px: 0, offgrid: 0 };
+
+  for (const n of walkAll(roots)) {
+    if (DEFAULT_NAME_RE.test(n.name)) { counts.names++; res.changes.push("name: " + n.name); }
+    if (typeof n.x === "number" &&
+        (n.x % 1 || n.y % 1 || (typeof n.width === "number" && (n.width % 1 || n.height % 1)))) {
+      counts.px++; res.changes.push("fractional px: " + n.name);
+    }
+    for (const prop of ["fills", "strokes"]) {
+      const paints = n[prop];
+      if (!Array.isArray(paints)) continue;
+      const scope = prop === "strokes" ? "STROKE_COLOR"
+        : n.type === "TEXT" ? "TEXT_FILL"
+        : (n.type === "FRAME" || n.type === "COMPONENT" || n.type === "INSTANCE" || n.type === "SECTION") ? "FRAME_FILL"
+        : "SHAPE_FILL";
+      for (const p of paints) {
+        if (!p || p.type !== "SOLID" || p.visible === false) continue;
+        if (p.boundVariables && p.boundVariables.color) continue;
+        if (nearestColor(colors, p.color, scope)) {
+          counts.colors++; res.changes.push("unbound color: " + n.name + "." + prop);
+        }
+      }
+    }
+    if (n.layoutMode && n.layoutMode !== "NONE") {
+      for (const pr of AL_PROPS) {
+        const cur = n[pr];
+        if (typeof cur !== "number" || cur === 0) continue;
+        if (n.boundVariables && n.boundVariables[pr]) continue;
+        if (nearestNum(floats, cur, "GAP")) { counts.spacing++; res.changes.push("unbound spacing: " + n.name + "." + pr); }
+      }
+    }
+    if (n.type === "TEXT" && !n.textStyleId && typeof n.fontName !== "symbol" && typeof n.fontSize === "number") {
+      const cand = styles.some((s) => s.fontName.family === n.fontName.family &&
+        s.fontName.style === n.fontName.style && s.fontSize === n.fontSize);
+      if (cand) { counts.textstyles++; res.changes.push("no text style: " + n.name); }
+    }
+  }
+  // off-grid: прямі діти фрейма з COLUMNS-сіткою
+  for (const root of roots) {
+    const grid = (root.layoutGrids || []).find((g) => g.pattern === "COLUMNS" && g.visible !== false);
+    if (!grid || !root.children || grid.alignment !== "STRETCH") continue;
+    const count = grid.count, gutter = grid.gutterSize || 0, offset = grid.offset || 0;
+    const colW = (root.width - offset * 2 - gutter * (count - 1)) / count;
+    for (const n of root.children) {
+      if (typeof n.x !== "number") continue;
+      let on = false;
+      for (let i = 0; i < count; i++) if (Math.abs((offset + i * (colW + gutter)) - n.x) <= 1) { on = true; break; }
+      if (!on) { counts.offgrid++; res.changes.push("off-grid: " + n.name + " x:" + Math.round(n.x)); }
+    }
+  }
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  res.changes.unshift("LINT: " + total + " issues — colors:" + counts.colors +
+    " spacing:" + counts.spacing + " text-styles:" + counts.textstyles +
+    " names:" + counts.names + " px:" + counts.px + " off-grid:" + counts.offgrid);
+  res.readonly = true;
+}
+
+// ── Contrast: WCAG-перевірка текстів проти фактичного фону (read-only) ───
+function relLum(c) {
+  const f = (v) => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+  return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
+}
+function contrastRatio(a, b) {
+  const l1 = Math.max(relLum(a), relLum(b)), l2 = Math.min(relLum(a), relLum(b));
+  return (l1 + 0.05) / (l2 + 0.05);
+}
+async function paintToColor(p) {
+  if (!p || p.visible === false) return null;
+  if (p.type === "IMAGE") return "IMAGE";
+  if (p.type !== "SOLID") return "COMPLEX";
+  const bv = p.boundVariables && p.boundVariables.color;
+  if (bv) {
+    const v = await figma.variables.getVariableByIdAsync(bv.id);
+    const val = v ? await resolveVarValue(v) : null;
+    if (val && val.r !== undefined) return { r: val.r, g: val.g, b: val.b };
+  }
+  return { r: p.color.r, g: p.color.g, b: p.color.b };
+}
+async function effectiveBg(node) {
+  let p = node.parent;
+  while (p && p.type !== "PAGE") {
+    if (Array.isArray(p.fills)) {
+      for (let i = p.fills.length - 1; i >= 0; i--) {
+        const c = await paintToColor(p.fills[i]);
+        if (c) return c;
+      }
+    }
+    p = p.parent;
+  }
+  return null;
+}
+async function opContrast(roots, res) {
+  let fails = 0, ok = 0;
+  for (const n of walkAll(roots)) {
+    if (n.type !== "TEXT" || !Array.isArray(n.fills) || !n.fills.length) continue;
+    const fg = await paintToColor(n.fills[0]);
+    if (!fg || typeof fg === "string") { res.skipped.push(n.name + " (complex fill)"); continue; }
+    const bg = await effectiveBg(n);
+    if (!bg) { res.skipped.push(n.name + " (no solid bg found)"); continue; }
+    if (typeof bg === "string") { res.skipped.push(n.name + " (" + bg.toLowerCase() + " bg — check manually)"); continue; }
+    const r = contrastRatio(fg, bg);
+    const size = typeof n.fontSize === "number" ? n.fontSize : 16;
+    const boldish = typeof n.fontName !== "symbol" && /bold|black|semi|heavy/i.test(n.fontName.style);
+    const need = size >= 24 || (size >= 18.7 && boldish) ? 3.0 : 4.5;
+    if (r < need) {
+      fails++;
+      res.changes.push("FAIL " + r.toFixed(2) + " < " + need + ": \"" +
+        (n.characters || n.name).slice(0, 30) + "\" (" + Math.round(size) + "px)");
+    } else ok++;
+  }
+  res.changes.unshift("CONTRAST: " + fails + " fail / " + ok + " pass (WCAG AA)");
+  res.readonly = true;
+}
+
 const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor,
   textstyle: opTextStyles, sectionize: opSectionize, imgreuse: opImgReuse, imggen: opImgRequest,
-  autolayout: opAutoLayout, grid: opGrid, spell: opSpell, redesign: opRedesign, prototype: opPrototype };
+  autolayout: opAutoLayout, grid: opGrid, spell: opSpell, redesign: opRedesign, prototype: opPrototype,
+  lint: opLint, contrast: opContrast };
 const OP_NAMES = { clean: "Clean", rename: "Rename", varsal: "AL→vars", varscolor: "Colors→vars",
   textstyle: "Text styles", sectionize: "Sectionize", imgreuse: "Img reuse", imggen: "Magnific request",
   autolayout: "Auto-layout", grid: "Grid snap", spell: "Spellcheck", redesign: "Redesign",
-  prototype: "Prototype" };
+  prototype: "Prototype", lint: "Lint", contrast: "Contrast" };
 
 function safeStringify(value) {
   if (value === undefined) return null;
@@ -954,8 +1076,10 @@ figma.ui.onmessage = async (msg) => {
     const res = { changes: [], skipped: [] };
     try {
       await fn(sel, res, msg.params || {});
-      const summary = OP_NAMES[msg.kind] + ": " + res.changes.length + " changes" +
-        (res.skipped.length ? ", " + res.skipped.length + " skipped" : "");
+      const summary = res.readonly
+        ? (res.changes[0] || OP_NAMES[msg.kind])
+        : OP_NAMES[msg.kind] + ": " + res.changes.length + " changes" +
+          (res.skipped.length ? ", " + res.skipped.length + " skipped" : "");
       figma.notify(summary);
       figma.ui.postMessage({
         type: "opreport", kind: msg.kind, summary,
@@ -966,7 +1090,7 @@ figma.ui.onmessage = async (msg) => {
       if (res.spell) figma.ui.postMessage({ type: "spellrequest", texts: res.spell.texts });
       if (res.redesign) figma.ui.postMessage({ type: "redesignrequest", request: res.redesign });
       if (res.prototype) figma.ui.postMessage({ type: "protorequest", request: res.prototype });
-      figma.commitUndo(); // кожна операція = окремий крок undo
+      if (!res.readonly) figma.commitUndo(); // кожна мутація = окремий крок undo
     } catch (e) {
       figma.notify("Error " + OP_NAMES[msg.kind] + ": " + ((e && e.message) || e));
       figma.ui.postMessage({ type: "opreport", kind: msg.kind, error: true,
