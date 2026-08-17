@@ -450,7 +450,7 @@ async def run_alplan(request: dict):
 
 
 
-async def run_protocol(phrase: str, label: str, timeout_s: int = 900):
+async def run_protocol(phrase: str, label: str, timeout_s: int = 900, model: str = None, effort: str = None):
     """Одразу виконати протокол headless-сесією (cwd=mistok → CLAUDE.md з протоколами)."""
     print(f"[proto-run] start: {label}", flush=True)
     try:
@@ -464,7 +464,9 @@ async def run_protocol(phrase: str, label: str, timeout_s: int = 900):
         await send_plugin({"type": "chatstatus", "text": label + " (headless, up to ~15 min)…"})
         proc = await asyncio.create_subprocess_exec(
             claude, "-p", phrase,
-            "--model", "sonnet", "--dangerously-skip-permissions",
+            "--model", model or "opus",
+            *(["--effort", effort] if effort else []),
+            "--dangerously-skip-permissions",
             cwd=str(Path.home() / "Code" / "mistok" / "headless"), env=env,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -610,7 +612,7 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                     with open("/tmp/mistok-design-request.json", "w", encoding="utf-8") as f:
                         json.dump(req, f, ensure_ascii=False, indent=1)
                     print(f"[design] request: {req.get('frame', {}).get('name')} → /tmp/mistok-design-request.json", flush=True)
-                    asyncio.create_task(run_protocol("recreate the design", "◆ recreating"))
+                    asyncio.create_task(run_protocol("recreate the design", "◆ recreating", model=req.get("model"), effort=req.get("effort")))
                 except OSError as e:
                     print(f"[design] failed: {e}", flush=True)
                 continue
@@ -624,7 +626,7 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                     with open("/tmp/mistok-redesign-request.json", "w", encoding="utf-8") as f:
                         json.dump(req, f, ensure_ascii=False, indent=1)
                     print(f"[redesign] request: {req.get('frame', {}).get('name')} → /tmp/mistok-redesign-request.json", flush=True)
-                    asyncio.create_task(run_protocol("redesign the section", "⟳ redesigning"))
+                    asyncio.create_task(run_protocol("redesign the section", "⟳ redesigning", model=req.get("model"), effort=req.get("effort")))
                 except OSError as e:
                     print(f"[redesign] failed: {e}", flush=True)
                 continue

@@ -518,7 +518,8 @@ function renderOps(show) {
         fitHeight();
         return;
       }
-      parent.postMessage({ pluginMessage: { type: "op", kind: btn.dataset.kind } }, "*");
+      parent.postMessage({ pluginMessage: { type: "op", kind: btn.dataset.kind,
+        params: { model: mSel.value || null, effort: eSel.value || null } } }, "*");
       startTask("op:" + btn.dataset.kind, (OP_BTNS.find((b) => b.kind === btn.dataset.kind) || {}).tip + "…");
       flash(btn, ICONS.wait, ICONS[btn.dataset.kind]);
     };

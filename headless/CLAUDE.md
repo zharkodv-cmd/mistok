@@ -36,5 +36,12 @@ Works for any selection (bitmap source: shot + read visually first). Find 2–3 
 ### build the prototype → /tmp/mistok-prototype-request.json
 Modern minimalist prototype: Inter (Regular/Medium/"Semi Bold"), black/white/gray (#111/#6B6B6B/#F0F0F0/#E5E5E5), full auto-layout, ALL texts and logic of the source (bitmap → shot + read visually).
 
+## Quality bar (hard checks before finishing)
+- Contrast: every text passes WCAG AA against its actual background. On dark fills use the file's LIGHT text tokens (check variable scopes) — never muted gray body on dark.
+- Buttons/CTAs: auto-layout HUG with padding ~24-32/12-16, label fully visible, primary vs secondary clearly distinct.
+- Composition: commit to ONE distinctive idea from the reference (oversized display type, split layout, editorial numbered rows, dramatic imagery). A plain stack of text blocks is a failure.
+- Hierarchy: exactly one dominant element; spacing rhythm consistent (multiples of the file's spacing tokens).
+- Self-check round: shot the result, walk this list, fix what fails — then finish.
+
 ## Finish
 Delete the request file. Reply with ONE line: what was built, frame name, key counts. No process narration.

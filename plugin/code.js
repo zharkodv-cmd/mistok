@@ -1069,6 +1069,9 @@ figma.ui.onmessage = async (msg) => {
         roots: sel.map((n) => ({ id: n.id, name: n.name })),
         changes: res.changes.slice(0, 80), skipped: res.skipped.slice(0, 80),
       });
+      for (const k of ["design", "redesign", "prototype"]) {
+        if (res[k] && msg.params) { res[k].model = msg.params.model || null; res[k].effort = msg.params.effort || null; }
+      }
       if (res.request) figma.ui.postMessage({ type: "imgrequest", request: res.request });
       if (res.spell) figma.ui.postMessage({ type: "spellrequest", texts: res.spell.texts });
       if (res.redesign) figma.ui.postMessage({ type: "redesignrequest", request: res.redesign });
