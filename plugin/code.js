@@ -44,7 +44,7 @@ async function floatVarList() {
   const out = [];
   for (const v of await figma.variables.getLocalVariablesAsync("FLOAT")) {
     const val = await resolveVarValue(v);
-    if (typeof val === "number") out.push({ v, val });
+    if (typeof val === "number") out.push({ v, val, scopes: v.scopes });
   }
   return out;
 }
@@ -53,15 +53,21 @@ async function colorVarList() {
   const out = [];
   for (const v of await figma.variables.getLocalVariablesAsync("COLOR")) {
     const val = await resolveVarValue(v);
-    if (val && val.r !== undefined) out.push({ v, r: val.r, g: val.g, b: val.b });
+    if (val && val.r !== undefined) out.push({ v, r: val.r, g: val.g, b: val.b, scopes: v.scopes });
   }
   return out;
 }
 
-// точний збіг, інакше найближче в межах max(2, 10%); нічого підходящого → null
-function nearestNum(list, x) {
+// скоупи у файлі розставлені — біндимо тільки в межах свого скоупа
+function inScope(e, scope) {
+  return !e.scopes || !e.scopes.length || e.scopes.includes("ALL_SCOPES") || e.scopes.includes(scope);
+}
+
+// точний збіг, інакше найближче в межах max(2, 10%) — лише серед свого скоупа
+function nearestNum(list, x, scope) {
   let best = null, bestD = Infinity;
   for (const e of list) {
+    if (scope && !inScope(e, scope)) continue;
     const d = Math.abs(e.val - x);
     if (d < bestD) { bestD = d; best = e; }
   }
@@ -69,10 +75,11 @@ function nearestNum(list, x) {
   return null;
 }
 
-// сума |ΔRGB|; ≤0.06 (~5/канал) вважаємо «нашим» кольором
-function nearestColor(list, c) {
+// сума |ΔRGB| ≤ 0.06 — лише серед свого скоупа
+function nearestColor(list, c, scope) {
   let best = null, bestD = Infinity;
   for (const e of list) {
+    if (scope && !inScope(e, scope)) continue;
     const d = Math.abs(e.r - c.r) + Math.abs(e.g - c.g) + Math.abs(e.b - c.b);
     if (d < bestD) { bestD = d; best = e; }
   }
@@ -99,7 +106,7 @@ async function opVarsAL(roots, res) {
       const cur = n[p];
       if (typeof cur !== "number" || cur === 0) continue;
       if (n.boundVariables && n.boundVariables[p]) continue; // вже прив'язано
-      const m = nearestNum(floats, cur);
+      const m = nearestNum(floats, cur, "GAP");
       if (m) { n.setBoundVariable(p, m.v); res.changes.push(n.name + "." + p + ": " + cur + " → " + m.v.name); }
       else res.skipped.push(n.name + "." + p + "=" + cur);
     }
@@ -113,12 +120,16 @@ async function opVarsColor(roots, res) {
     for (const prop of ["fills", "strokes"]) {
       const paints = n[prop];
       if (!Array.isArray(paints) || !paints.length) continue;
+      const scope = prop === "strokes" ? "STROKE_COLOR"
+        : n.type === "TEXT" ? "TEXT_FILL"
+        : (n.type === "FRAME" || n.type === "COMPONENT" || n.type === "INSTANCE" || n.type === "SECTION") ? "FRAME_FILL"
+        : "SHAPE_FILL";
       let arr = null;
       for (let i = 0; i < paints.length; i++) {
         const p = paints[i];
         if (!p || p.type !== "SOLID" || p.visible === false) continue;
         if (p.boundVariables && p.boundVariables.color) continue;
-        const m = nearestColor(colors, p.color);
+        const m = nearestColor(colors, p.color, scope);
         if (m) {
           arr = arr || JSON.parse(JSON.stringify(paints));
           arr[i] = figma.variables.setBoundVariableForPaint(arr[i], "color", m.v);
@@ -134,12 +145,12 @@ async function opVarsColor(roots, res) {
       try {
         await figma.loadFontAsync(n.fontName);
         if (typeof n.fontSize === "number" && !(n.boundVariables && n.boundVariables.fontSize)) {
-          const m = floats.find((e) => e.val === n.fontSize);
+          const m = floats.find((e) => e.val === n.fontSize && inScope(e, "FONT_SIZE"));
           if (m) { n.setBoundVariable("fontSize", m.v); res.changes.push(n.name + ".fontSize → " + m.v.name); }
         }
         if (typeof n.lineHeight !== "symbol" && n.lineHeight.unit === "PIXELS" &&
             !(n.boundVariables && n.boundVariables.lineHeight)) {
-          const m = floats.find((e) => e.val === n.lineHeight.value);
+          const m = floats.find((e) => e.val === n.lineHeight.value && inScope(e, "LINE_HEIGHT"));
           if (m) { n.setBoundVariable("lineHeight", m.v); res.changes.push(n.name + ".lineHeight → " + m.v.name); }
         }
       } catch (e) { res.skipped.push(n.name + " (font: " + ((e && e.message) || e) + ")"); }
@@ -148,6 +159,7 @@ async function opVarsColor(roots, res) {
 }
 
 async function opClean(roots, res) {
+  await opRename(roots, res); // Clean включає Rename: імена + розгрупування
   for (const n of walkAll(roots)) {
     // піксельна сітка: цілі координати й розміри
     if (typeof n.x === "number" && (n.x % 1 || n.y % 1)) {
@@ -174,15 +186,37 @@ async function opRename(roots, res) {
     try { figma.ungroup(g); res.changes.push("розгруповано " + g.name); }
     catch (e) { res.skipped.push(g.name + " (ungroup)"); }
   }
+  // item: ≥3 дефолтних сусідів одного розміру = повторюваний елемент
+  const itemNamed = new Set();
+  const parents = new Set();
+  for (const n of walkAll(roots)) if (n.children && n.children.length) parents.add(n);
+  for (const p of parents) {
+    const bySize = {};
+    for (const c of p.children) {
+      if (!DEFAULT_RE.test(c.name) || typeof c.width !== "number") continue;
+      const key = Math.round(c.width) + "x" + Math.round(c.height);
+      (bySize[key] = bySize[key] || []).push(c);
+    }
+    for (const key in bySize) {
+      if (bySize[key].length < 3) continue;
+      for (const c of bySize[key]) { res.changes.push(c.name + " → item"); c.name = "item"; itemNamed.add(c.id); }
+    }
+  }
   for (const n of walkAll(roots)) {
-    if (!DEFAULT_RE.test(n.name)) continue;
+    if (itemNamed.has(n.id) || !DEFAULT_RE.test(n.name)) continue;
+    const parent = n.parent;
     let name = null;
-    const t = n.findOne && n.findOne((c) => c.type === "TEXT" && c.characters.trim());
-    if (t) name = t.characters.trim().slice(0, 24);
-    else if (Array.isArray(n.fills) && n.fills.some((p) => p && p.type === "IMAGE")) name = "img";
-    else if (n.layoutMode === "HORIZONTAL") name = "row";
-    else if (n.layoutMode === "VERTICAL") name = "col";
-    else if (n.type === "RECTANGLE") name = "box";
+    if (parent && typeof parent.width === "number" && typeof n.width === "number" &&
+        n.width * n.height >= parent.width * parent.height * 0.85) name = "bg";
+    else if (Array.isArray(n.fills) && n.fills.some((p) => p && p.type === "IMAGE")) name = "image";
+    else {
+      const t = n.findOne && n.findOne((c) => c.type === "TEXT" && c.characters.trim());
+      if (t) name = t.characters.trim().slice(0, 24);
+      else if (n.layoutMode === "HORIZONTAL") name = "row";
+      else if (n.layoutMode === "VERTICAL") name = "col";
+      else if (n.type === "ELLIPSE") name = "circle";
+      else if (n.type === "RECTANGLE") name = "box";
+    }
     if (name && name !== n.name) { res.changes.push(n.name + " → " + name); n.name = name; }
   }
 }
@@ -273,19 +307,22 @@ function findImageSlots(roots) {
   return slots;
 }
 
-// 🖼 reuse: картинки, що вже використовуються на сторінці → у плейсхолдери за пропорцією
+// 🖼 reuse: картинки з УСЬОГО файлу → у плейсхолдери за пропорцією
 async function opImgReuse(roots, res) {
+  await figma.loadAllPagesAsync();
   const pool = [];
   const seen = new Set();
-  for (const n of figma.currentPage.findAll((c) => Array.isArray(c.fills))) {
-    for (const p of n.fills) {
-      if (p && p.type === "IMAGE" && p.imageHash && !seen.has(p.imageHash)) {
-        seen.add(p.imageHash);
-        pool.push({ hash: p.imageHash, w: n.width, h: n.height, from: n.name });
+  for (const pg of figma.root.children) {
+    for (const n of pg.findAll((c) => Array.isArray(c.fills))) {
+      for (const p of n.fills) {
+        if (p && p.type === "IMAGE" && p.imageHash && !seen.has(p.imageHash)) {
+          seen.add(p.imageHash);
+          pool.push({ hash: p.imageHash, w: n.width, h: n.height, from: pg.name + "/" + n.name });
+        }
       }
     }
   }
-  if (!pool.length) throw new Error("на цій сторінці немає жодної картинки для повторного використання");
+  if (!pool.length) throw new Error("у файлі немає жодної картинки для повторного використання");
   const used = new Set();
   for (const slot of findImageSlots(roots)) {
     const ar = slot.width / slot.height;
@@ -335,7 +372,12 @@ function median(a) {
   return s[Math.floor(s.length / 2)];
 }
 
-function alApply(f, res) {
+function alBind(node, prop, floats, res) {
+  const m = nearestNum(floats, node[prop], "GAP");
+  if (m) { node.setBoundVariable(prop, m.v); res.changes.push(node.name + "." + prop + " → " + m.v.name); }
+}
+
+function alApply(f, res, floats) {
   const all = f.children.slice();
   // фонові шари (покривають >85% фрейма) — виводимо з потоку
   const bg = [], kids = [];
@@ -382,6 +424,7 @@ function alApply(f, res) {
       wrap.layoutMode = "HORIZONTAL";
       wrap.primaryAxisSizingMode = "FIXED"; wrap.counterAxisSizingMode = "FIXED";
       wrap.itemSpacing = Math.round(median(gaps));
+      alBind(wrap, "itemSpacing", floats, res);
       res.changes.push(f.name + ": row×" + r.length + " gap:" + wrap.itemSpacing);
       return wrap;
     });
@@ -409,6 +452,9 @@ function alApply(f, res) {
   f.paddingTop = Math.max(0, Math.round(minY));
   f.paddingRight = Math.max(0, Math.round(f.width - maxX));
   f.paddingBottom = Math.max(0, Math.round(f.height - maxY));
+  for (const p of ["itemSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft"]) {
+    if (f[p] > 0) alBind(f, p, floats, res);
+  }
 
   for (const b of bg) { b.layoutPositioning = "ABSOLUTE"; res.changes.push(b.name + " → absolute (фон)"); }
   res.changes.push(f.name + ": " + dir + " gap:" + f.itemSpacing +
@@ -427,7 +473,8 @@ async function opAutoLayout(roots, res) {
     }
   }
   if (!targets.length) throw new Error("нема фреймів без auto-layout з 2+ дітьми");
-  for (const f of targets) alApply(f, res);
+  const floats = await floatVarList();
+  for (const f of targets) alApply(f, res, floats);
 }
 
 const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor,
