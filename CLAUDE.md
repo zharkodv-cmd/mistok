@@ -55,7 +55,7 @@ The plugin runtime exposes a small helper namespace. Use these to keep scripts s
 | `await h.var_(idOrKey)` | Resolve a variable from id or instance |
 | `await h.importComp(key)` | `figma.importComponentByKeyAsync(key)` |
 | `await h.importVar(key)` | `figma.variables.importVariableByKeyAsync(key)` |
-| `await h.spec(node, {maxDepth})` | Compact design spec — geometry, layout, fills as hex/`var(name)`, typography |
+| `await h.spec(node, {maxDepth})` | Compact design spec — geometry, layout, fills as hex/`var(name)`/`IMAGE:<hash>`, typography, layout grids |
 | `await h.varsDump()` | Local variables by collection, aliases as `→name`, colors as hex |
 
 **Use them.** Compared to inline boilerplate, helpers save ~70% of the script and avoid common mistakes (frozen `node.fills`, missing `loadFontAsync`, etc.).
@@ -195,6 +195,16 @@ launchctl bootout gui/$(id -u)/com.figmosha.bridge        # зупинити з�
 ```
 
 Плагін у Figma після рестарту bridge перепідключається сам (~2 с). Запуск плагіна: **⌘⌥P** (повторити останній плагін) — автозапуску dev-плагінів Figma не має.
+
+## Картинки: Magnific MCP
+
+Коли користувач просить заповнити фрейми картинками — генеруй через **Magnific MCP**, тільки якісні стильові зображення, ніякого AI-слопу:
+
+- Спершу арт-дирекшн проєкту (`projects/<name>.md`, токени кольорів) — промпт має йому відповідати.
+- Промпт конкретний: сюжет, композиція, світло, палітра (hex з токенів), стиль зйомки. Без «beautiful modern image».
+- Заборонено: текст/вотермарки, перенасичений HDR, сток-генерик, артефакти анатомії. Виглядає як слоп → перегенеруй, не вставляй.
+- Розмір/аспект під цільову ноду (з `spec`). Вставка: bytes → `figma.createImage` → IMAGE-філ `scaleMode:'FILL'`.
+- Для hero-місць 2–3 варіанти, показати користувачу перед масовим заповненням.
 
 ## UI плагіна
 

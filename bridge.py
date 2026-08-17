@@ -34,7 +34,7 @@ ERROR_HINTS = [
     ("Cannot assign to read only property",
      "node.fills/strokes is frozen — copy via JSON.parse(JSON.stringify(...)) before mutating, or use h.bF()/h.bS()"),
     ("permission not specified in manifest",
-     "manifest.json missing a permission — edit plugin/manifest.json, sync to /mnt/c/Users/User/figmosha-plugin/, then re-import the plugin in Figma"),
+     "manifest.json missing a permission — edit plugin/manifest.json, then re-import the plugin in Figma (Plugins → Development → Import plugin from manifest…)"),
     ("unloaded font",
      "use h.setText(node, text) or h.withFonts(root, fn) — they autoload fonts. Or manually: await figma.loadFontAsync(node.fontName)"),
     ("font has not been loaded",

@@ -179,7 +179,8 @@ const HELPERS = {
         const op = p.opacity != null && p.opacity < 1 ? "@" + Math.round(p.opacity * 100) + "%" : "";
         return hex(p.color) + op;
       }
-      return p.type; // GRADIENT_LINEAR, IMAGE, …
+      if (p.type === "IMAGE") return "IMAGE:" + (p.imageHash || "?") + " " + (p.scaleMode || "");
+      return p.type; // GRADIENT_LINEAR, …
     };
     const walk = async (n, d) => {
       const o = { id: n.id, name: n.name, type: n.type };
@@ -220,6 +221,14 @@ const HELPERS = {
         const ef = n.effects.filter((e) => e.visible !== false)
           .map((e) => e.type + " " + (e.radius || 0) + "px");
         if (ef.length) o.effects = ef;
+      }
+      if (n.layoutGrids && n.layoutGrids.length) {
+        o.grids = n.layoutGrids.filter((g) => g.visible !== false).map((g) =>
+          g.pattern + (g.count ? " count:" + g.count : "") +
+          (g.gutterSize != null ? " gutter:" + g.gutterSize : "") +
+          (g.offset != null ? " offset:" + g.offset : "") +
+          (g.sectionSize != null ? " size:" + g.sectionSize : "") +
+          (g.alignment ? " " + g.alignment : ""));
       }
       if (n.children && d < maxDepth) {
         o.children = [];
