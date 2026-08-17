@@ -171,13 +171,7 @@
   }
   @keyframes busyslide { to { left: 100%; } }
   body.mini #busy { display: none; }
-  #tasks {
-    display: none; font-family: ui-monospace, monospace; font-size: 10px;
-    color: var(--accent); flex: none;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  #tasks.on { display: block; }
-  body.mini #tasks { display: none; }
+  #dot.busy { background: var(--accent); box-shadow: 0 0 6px rgba(125,211,252,.6); animation: pulse 1s infinite; }
 
   /* миттєвий тултіп: коротка назва дії */
   [data-tip] { position: relative; }
@@ -209,7 +203,6 @@
     <button id="toggle" title="Collapse / expand">–</button>
   </div>
   <div id="busy"></div>
-  <div id="tasks"></div>
   <div id="limits"></div>
   <div id="sel"></div>
   <div id="ops"></div>
@@ -275,21 +268,19 @@ const activeTasks = new Map(); // key → label
 let busySince = 0;
 function renderTasks() {
   const bar = document.getElementById("busy");
-  const line = document.getElementById("tasks");
   const labels = [...activeTasks.values()];
   if (labels.length) {
     busySince = Date.now();
     bar.classList.add("on");
-    line.classList.add("on");
-    line.textContent = "▸ " + labels[0] + (labels.length > 1 ? "  ·  queued: " + (labels.length - 1) : "");
-    statusEl.textContent = "working…";
+    dotEl.classList.add("busy");
+    statusEl.textContent = labels[0] + (labels.length > 1 ? " · +" + (labels.length - 1) : "");
   } else {
     const wait = Math.max(0, 700 - (Date.now() - busySince));
     setTimeout(() => {
       if (!activeTasks.size) {
         bar.classList.remove("on");
-        line.classList.remove("on");
-        if (ws && ws.readyState === WebSocket.OPEN) statusEl.textContent = "connected";
+        dotEl.classList.remove("busy");
+        if (ws && ws.readyState === WebSocket.OPEN) statusEl.textContent = "";
       }
     }, wait);
   }
@@ -362,7 +353,7 @@ function connect() {
   }
 
   ws.onopen = () => {
-    setStatus("connected", "ok");
+    setStatus("", "ok");
     log("[ws] connected");
     try { ws.send(JSON.stringify({ type: "hello", version: "2.1" })); } catch (e) {}
   };
