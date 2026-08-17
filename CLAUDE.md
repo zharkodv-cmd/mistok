@@ -215,7 +215,7 @@ launchctl bootout gui/$(id -u)/com.mistok.bridge        # зупинити зо�
 
 ## UI плагіна
 
-Темна тема, статус-дот, кольоровий лог. Зверху вниз: limit-бари Claude (session/weekly, notify при ≥80%), рядок виділення (id + кнопки **⧉** copy та **📷** — PNG @2x у `~/Desktop/mistok-shots/` і в системний буфер), **кнопки операцій над виділенням** (🧹 Clean — rename (bg/image/item/icon/divider…) + розгрупування + цілі px + auto-layout + variables; ✏️ Rename — дефолтні `Frame N` за вмістом + розгрупування `Group N`; ⇥ AL — відступи/гапи → найближчі FLOAT variables; 🎨 Colors — кольори/fontSize/lineHeight → найближчі variables; T — текстові ноди → локальні Text Styles), stats-рядок (тривалість сесії, проєкт, msgs, токени — push з bridge кожні 60 с), summary сесії, лог з підсвіткою мутацій (`[exec✎]`).
+Темна тема, статус-дот, кольоровий лог. Зверху вниз: limit-бари Claude (session/weekly, notify при ≥80%), рядок виділення (id + кнопки **⧉** copy та **📷** — PNG @2x у `~/Desktop/mistok-shots/` і в системний буфер), **кнопки операцій над виділенням** (🧹 Clean — логічні папки (кластеризація ≤24px) + rename (bg/image/item/icon/divider…) + розгрупування + цілі px; auto-layout і variables — окремі кнопки; ✏️ Rename — дефолтні `Frame N` за вмістом + розгрупування `Group N`; ⇥ AL — відступи/гапи → найближчі FLOAT variables; 🎨 Colors — кольори/fontSize/lineHeight → найближчі variables; T — текстові ноди → локальні Text Styles), stats-рядок (тривалість сесії, проєкт, msgs, токени — push з bridge кожні 60 с), summary сесії, лог з підсвіткою мутацій (`[exec✎]`).
 
 Внизу панелі — **чат із Claude**: поле вводу → bridge запускає headless `claude -p --continue` (cwd `~/Code/mistok`, всі тули включно з mistok CLI) → відповідь у панелі. Один запит за раз, таймаут 300 с.
 

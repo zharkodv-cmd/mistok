@@ -158,10 +158,47 @@ async function opVarsColor(roots, res) {
   }
 }
 
+// логічні «папки»: сусіди ближче 24px групуються в named group
+function rectGap(a, b) {
+  const dx = Math.max(0, Math.max(a.x - (b.x + b.width), b.x - (a.x + a.width)));
+  const dy = Math.max(0, Math.max(a.y - (b.y + b.height), b.y - (a.y + a.height)));
+  return Math.max(dx, dy);
+}
+
+async function opFolders(roots, res) {
+  for (const parent of walkAll(roots)) {
+    if (!parent.children || parent.children.length < 4) continue;
+    if (parent.layoutMode && parent.layoutMode !== "NONE") continue;
+    const flow = parent.children.filter((k) =>
+      typeof k.width === "number" && k.visible !== false &&
+      !(k.width * k.height >= parent.width * parent.height * 0.6)); // bg лишається зверху
+    if (flow.length < 3) continue;
+    const uf = flow.map((_, i) => i);
+    const find = (i) => (uf[i] === i ? i : (uf[i] = find(uf[i])));
+    for (let i = 0; i < flow.length; i++) {
+      for (let j = i + 1; j < flow.length; j++) {
+        if (rectGap(flow[i], flow[j]) <= 24) uf[find(i)] = find(j);
+      }
+    }
+    const clusters = {};
+    flow.forEach((k, i) => { const r = find(i); (clusters[r] = clusters[r] || []).push(k); });
+    for (const key in clusters) {
+      const c = clusters[key];
+      if (c.length < 2 || c.length === flow.length) continue; // все в одну папку — безглуздо
+      const g = figma.group(c, parent);
+      const t = g.findOne((x) => x.type === "TEXT" && x.characters.trim());
+      g.name = t ? t.characters.trim().slice(0, 24) : "block";
+      res.changes.push("папка «" + g.name + "» (" + c.length + " ел.)");
+    }
+  }
+}
+
+// Clean = логічні папки + розгрупування зайвого + осмислені імена + цілі px.
+// Auto-layout і variables — окремими кнопками (⚏, ⇥, 🎨).
 async function opClean(roots, res) {
-  await opRename(roots, res); // 1. імена + розгрупування
+  await opFolders(roots, res);
+  await opRename(roots, res);
   for (const n of walkAll(roots)) {
-    // 2. піксельна сітка: цілі координати й розміри
     if (typeof n.x === "number" && (n.x % 1 || n.y % 1)) {
       n.x = Math.round(n.x); n.y = Math.round(n.y);
       res.changes.push(n.name + ": x/y → ціле");
@@ -172,8 +209,6 @@ async function opClean(roots, res) {
       catch (e) {}
     }
   }
-  try { await opAutoLayout(roots, res); } catch (e) {} // 3. логічний auto-layout (нема кандидатів — ок)
-  await opVarsAL(roots, res); // 4. відступи/гапи → variables (скоуп GAP)
 }
 
 async function opRename(roots, res) {
@@ -330,15 +365,43 @@ async function opImgReuse(roots, res) {
     }
   }
   if (!pool.length) throw new Error("у файлі немає жодної картинки для повторного використання");
+
+  const tokenize = (s) => new Set((s.toLowerCase().match(/[a-zа-яіїєґ]{3,}/gi) || []));
+  const contextTokens = (n) => {
+    const texts = [];
+    let scope = n.parent;
+    for (let up = 0; scope && up < 2; up++) {
+      if (scope.findAll) {
+        for (const t of scope.findAll((c) => c.type === "TEXT")) {
+          const s = t.characters.trim();
+          if (s) texts.push(s);
+          if (texts.length >= 5) break;
+        }
+      }
+      if (texts.length) break;
+      scope = scope.parent;
+    }
+    return tokenize(n.name + " " + (n.parent ? n.parent.name : "") + " " + texts.join(" "));
+  };
+
+  // якість: джерело від 100px по меншій стороні; релевантність: збіг слів
+  // контексту слота з іменем джерела; далі пропорція і розмір джерела
+  const quality = pool.filter((e) => Math.min(e.w, e.h) >= 100);
+  const candidates = quality.length ? quality : pool;
   const used = new Set();
   for (const slot of findImageSlots(roots)) {
+    const ctx = contextTokens(slot);
     const ar = slot.width / slot.height;
-    const ranked = pool.slice().sort((a, b) =>
-      Math.abs(a.w / a.h - ar) - Math.abs(b.w / b.h - ar));
-    const best = ranked.find((e) => !used.has(e.hash)) || ranked[0];
+    const ranked = candidates.map((e) => {
+      const srcTok = tokenize(e.from);
+      let overlap = 0;
+      for (const t of ctx) if (srcTok.has(t)) overlap++;
+      return { e, overlap, arDiff: Math.abs(e.w / e.h - ar), area: e.w * e.h };
+    }).sort((a, b) => b.overlap - a.overlap || a.arDiff - b.arDiff || b.area - a.area);
+    const best = (ranked.find((r) => !used.has(r.e.hash)) || ranked[0]).e;
     used.add(best.hash);
     slot.fills = [{ type: "IMAGE", imageHash: best.hash, scaleMode: "FILL" }];
-    res.changes.push(slot.name + " ← " + best.from);
+    res.changes.push(slot.name + " ← " + best.from + " (" + Math.round(best.w) + "×" + Math.round(best.h) + ")");
   }
   if (!res.changes.length) res.skipped.push("плейсхолдерів не знайдено (імена ph/img/photo/… без дітей)");
 }
