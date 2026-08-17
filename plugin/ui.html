@@ -309,6 +309,8 @@ const ICONS = {
   varscolor: I('<path d="M8 2.2S4.2 6.8 4.2 9.4a3.8 3.8 0 007.6 0C11.8 6.8 8 2.2 8 2.2z"/><path d="M6.3 9.8a1.7 1.7 0 001.5 1.6"/>'),
   textstyle: I('<path d="M3 4.8V3h10v1.8M8 3v10M6.2 13h3.6"/>'),
   sectionize: I('<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/>'),
+  imgreuse: I('<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="6" cy="6.5" r="1"/><path d="M2.5 11l3-3 2.5 2.5L11 7.5l2.5 2.5"/>'),
+  imggen: I('<path d="M8 2.5l1.2 3.3L12.5 7 9.2 8.2 8 11.5 6.8 8.2 3.5 7l3.3-1.2L8 2.5z"/><path d="M12.5 11l.5 1.2 1.2.5-1.2.5-.5 1.2-.5-1.2-1.2-.5 1.2-.5.5-1.2z"/>'),
   copy: I('<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 00-1.5-1.5H4A1.5 1.5 0 002.5 3v5A1.5 1.5 0 004 9.5h.5"/>'),
   shot: I('<path d="M2.5 5.8A1.3 1.3 0 013.8 4.5h1.4l1-1.5h3.6l1 1.5h1.4a1.3 1.3 0 011.3 1.3v6.4a1.3 1.3 0 01-1.3 1.3H3.8a1.3 1.3 0 01-1.3-1.3V5.8z"/><circle cx="8" cy="8.8" r="2.3"/>'),
   ok: '<span style="color:var(--ok)">✓</span>',
@@ -321,6 +323,8 @@ const OP_BTNS = [
   { kind: "varscolor", title: "Кольори/текст → найближчі variables" },
   { kind: "textstyle", title: "Текстові ноди → локальні Text Styles (family+style+size)" },
   { kind: "sectionize", title: "Загорнути виділене в Section і розкласти (pad/gap нижче)" },
+  { kind: "imgreuse", title: "Плейсхолдери ← картинки, що вже використовуються на сторінці" },
+  { kind: "imggen", title: "Запит на преміум-картинки через Magnific → виконує Claude" },
 ];
 function renderOps(show) {
   const el = document.getElementById("ops");

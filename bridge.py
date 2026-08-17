@@ -265,6 +265,17 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                 continue
             if mtype == "pong":
                 continue
+            if mtype == "imgrequest":
+                # запит на Magnific-генерацію — читає Claude-сесія
+                try:
+                    req = m.get("request") or {}
+                    req["ts"] = datetime.now().astimezone().isoformat(timespec="seconds")
+                    with open("/tmp/mistok-image-request.json", "w", encoding="utf-8") as f:
+                        json.dump(req, f, ensure_ascii=False, indent=1)
+                    print(f"[img] request: {len(req.get('slots') or [])} slots → /tmp/mistok-image-request.json", flush=True)
+                except OSError as e:
+                    print(f"[img] request failed: {e}", flush=True)
+                continue
             if mtype == "opreport":
                 # звіт кнопок-операцій — лог для Claude-сесій
                 try:

@@ -259,8 +259,79 @@ async function opSectionize(roots, res, params) {
     " (pad " + pad + ", gap " + gap + ")");
 }
 
-const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor, textstyle: opTextStyles, sectionize: opSectionize };
-const OP_NAMES = { clean: "Clean", rename: "Rename", varsal: "AL→vars", varscolor: "Colors→vars", textstyle: "Text styles", sectionize: "Sectionize" };
+// плейсхолдери під картинки: за іменем або сірий прямокутник без дітей
+const PH_RE = /^(ph|img|image|photo|picture|placeholder|rectangle)/i;
+function findImageSlots(roots) {
+  const slots = [];
+  for (const n of walkAll(roots)) {
+    if (typeof n.width !== "number" || !("fills" in n)) continue;
+    if (n.children && n.children.length) continue;
+    const hasImage = Array.isArray(n.fills) && n.fills.some((p) => p && p.type === "IMAGE");
+    if (hasImage) continue;
+    if (PH_RE.test(n.name) && n.width >= 40 && n.height >= 40) slots.push(n);
+  }
+  return slots;
+}
+
+// 🖼 reuse: картинки, що вже використовуються на сторінці → у плейсхолдери за пропорцією
+async function opImgReuse(roots, res) {
+  const pool = [];
+  const seen = new Set();
+  for (const n of figma.currentPage.findAll((c) => Array.isArray(c.fills))) {
+    for (const p of n.fills) {
+      if (p && p.type === "IMAGE" && p.imageHash && !seen.has(p.imageHash)) {
+        seen.add(p.imageHash);
+        pool.push({ hash: p.imageHash, w: n.width, h: n.height, from: n.name });
+      }
+    }
+  }
+  if (!pool.length) throw new Error("на цій сторінці немає жодної картинки для повторного використання");
+  const used = new Set();
+  for (const slot of findImageSlots(roots)) {
+    const ar = slot.width / slot.height;
+    const ranked = pool.slice().sort((a, b) =>
+      Math.abs(a.w / a.h - ar) - Math.abs(b.w / b.h - ar));
+    const best = ranked.find((e) => !used.has(e.hash)) || ranked[0];
+    used.add(best.hash);
+    slot.fills = [{ type: "IMAGE", imageHash: best.hash, scaleMode: "FILL" }];
+    res.changes.push(slot.name + " ← " + best.from);
+  }
+  if (!res.changes.length) res.skipped.push("плейсхолдерів не знайдено (імена ph/img/photo/… без дітей)");
+}
+
+// ✨ запит на преміум-генерацію через Magnific — виконує Claude-сесія
+async function opImgRequest(roots, res) {
+  const slots = findImageSlots(roots).map((n) => {
+    const parent = n.parent;
+    const texts = [];
+    let scope = parent;
+    for (let up = 0; scope && up < 2; up++) {
+      if (scope.findAll) {
+        for (const t of scope.findAll((c) => c.type === "TEXT")) {
+          const s = t.characters.trim();
+          if (s) texts.push(s.slice(0, 90));
+          if (texts.length >= 5) break;
+        }
+      }
+      if (texts.length) break;
+      scope = scope.parent;
+    }
+    return { id: n.id, name: n.name, w: Math.round(n.width), h: Math.round(n.height),
+             parent: parent ? parent.name : null, context: texts };
+  });
+  if (!slots.length) throw new Error("плейсхолдерів не знайдено (імена ph/img/photo/… без дітей)");
+  res.request = {
+    file: figma.root.name,
+    frame: { id: roots[0].id, name: roots[0].name },
+    slots,
+  };
+  res.changes.push("запит на " + slots.length + " картинок → скажи Claude: «встав картинки»");
+}
+
+const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor,
+  textstyle: opTextStyles, sectionize: opSectionize, imgreuse: opImgReuse, imggen: opImgRequest };
+const OP_NAMES = { clean: "Clean", rename: "Rename", varsal: "AL→vars", varscolor: "Colors→vars",
+  textstyle: "Text styles", sectionize: "Sectionize", imgreuse: "Img reuse", imggen: "Magnific request" };
 
 function safeStringify(value) {
   if (value === undefined) return null;
@@ -544,6 +615,7 @@ figma.ui.onmessage = async (msg) => {
         roots: sel.map((n) => ({ id: n.id, name: n.name })),
         changes: res.changes.slice(0, 80), skipped: res.skipped.slice(0, 80),
       });
+      if (res.request) figma.ui.postMessage({ type: "imgrequest", request: res.request });
     } catch (e) {
       figma.notify("Помилка " + OP_NAMES[msg.kind] + ": " + ((e && e.message) || e));
     }

@@ -31,6 +31,7 @@ When the user asks to fill frames/sections with images — generate via the **Ma
 - Forbidden in results: text/watermarks, oversaturated HDR look, generic-stock feel, anatomy artifacts. If the result reads as AI slop — refine the prompt and regenerate; do not insert it.
 - Match resolution/aspect to the target node (size known from `spec`). Insert: bytes → `figma.createImage(bytes)` → IMAGE fill, `scaleMode: 'FILL'`.
 - For hero/key placements generate 2–3 variants and show the user before mass-filling.
+- **Plugin ✨ button** writes a request to `/tmp/mistok-image-request.json` (frame, slots with ids/sizes/nearby texts). When the user says «встав картинки» — read it, generate per the quality bar above, insert each via `mistok img <slotId> file.png`, then delete the request file.
 
 ## Cautions
 

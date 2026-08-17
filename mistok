@@ -17,6 +17,7 @@ Commands:
     mistok spec <id> [--depth N]    # compact design spec (geometry, fills, typography)
     mistok vars                     # dump local variables by collection
     mistok sel                      # current selection in Figma (ids, names, sizes)
+    mistok img <id> file.png        # set IMAGE fill on a node from a local file
     mistok "<js>"                   # shorthand for `exec`
 
 Helpers available inside exec'd code (as `h.*`):
@@ -44,7 +45,7 @@ PORT = 8787
 KNOWN_CMDS = {
     "exec", "status", "tree", "find", "text", "variant",
     "clone", "rm", "import-component", "icomp",
-    "shot", "spec", "vars", "sel",
+    "shot", "spec", "vars", "sel", "img",
 }
 
 
@@ -289,6 +290,20 @@ def cmd_sel(args):
     return 0
 
 
+def cmd_img(args):
+    import base64
+    with open(args.file, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    code = (
+        f"const n = await figma.getNodeByIdAsync({json.dumps(args.node_id)});"
+        f"if (!n) throw new Error('node not found: ' + {json.dumps(args.node_id)});"
+        f"const img = figma.createImage(figma.base64Decode({json.dumps(b64)}));"
+        f"n.fills = [{{type: 'IMAGE', imageHash: img.hash, scaleMode: {json.dumps(args.scale_mode)}}}];"
+        f"return {{id: n.id, name: n.name, hash: img.hash}};"
+    )
+    return _emit(_exec(code, args.timeout)[1], raw=args.raw)
+
+
 def cmd_vars(args):
     _status, resp = _exec("return await h.varsDump();", args.timeout)
     if not resp.get("ok"):
@@ -380,6 +395,12 @@ def build_parser():
     p_sel = sub.add_parser("sel")
     _add_common_flags(p_sel)
 
+    p_img = sub.add_parser("img")
+    _add_common_flags(p_img)
+    p_img.add_argument("node_id")
+    p_img.add_argument("file")
+    p_img.add_argument("--scale-mode", default="FILL", choices=["FILL", "FIT", "CROP", "TILE"])
+
     return ap
 
 
@@ -418,6 +439,7 @@ def main():
         "spec": cmd_spec,
         "vars": cmd_vars,
         "sel": cmd_sel,
+        "img": cmd_img,
     }
     sys.exit(dispatch[args.cmd](args))
 
