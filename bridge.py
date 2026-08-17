@@ -182,7 +182,7 @@ async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effo
     try:
         import shutil
         env = dict(os.environ)
-        env["PATH"] = env.get("PATH", "") + ":/opt/homebrew/bin:/usr/local/bin"
+        env["PATH"] = env.get("PATH", "") + f":{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin"
         claude = shutil.which("claude", path=env["PATH"])
         if not claude:
             await ws.send_str(json.dumps({"type": "chatreply", "text": "claude CLI not found in PATH"}))
@@ -259,7 +259,7 @@ async def run_spell(ws: web.WebSocketResponse, texts: list):
     try:
         import shutil
         env = dict(os.environ)
-        env["PATH"] = env.get("PATH", "") + ":/opt/homebrew/bin:/usr/local/bin"
+        env["PATH"] = env.get("PATH", "") + f":{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin"
         claude = shutil.which("claude", path=env["PATH"])
         if not claude:
             return
