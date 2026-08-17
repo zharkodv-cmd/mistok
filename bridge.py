@@ -429,6 +429,8 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                     with open("/tmp/mistok-prototype-request.json", "w", encoding="utf-8") as f:
                         json.dump(req, f, ensure_ascii=False, indent=1)
                     print(f"[proto] request: {req.get('frame', {}).get('name')} → /tmp/mistok-prototype-request.json", flush=True)
+                    await ws.send_str(json.dumps({"type": "chatreply",
+                        "text": "▭ Запит на прототип «" + str(req.get('frame', {}).get('name')) + "» готовий.\nНапиши Claude у сесії: «зроби прототип»"}))
                 except OSError as e:
                     print(f"[proto] failed: {e}", flush=True)
                 continue
@@ -439,6 +441,8 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                     with open("/tmp/mistok-redesign-request.json", "w", encoding="utf-8") as f:
                         json.dump(req, f, ensure_ascii=False, indent=1)
                     print(f"[redesign] request: {req.get('frame', {}).get('name')} → /tmp/mistok-redesign-request.json", flush=True)
+                    await ws.send_str(json.dumps({"type": "chatreply",
+                        "text": "⟳ Запит на редизайн «" + str(req.get('frame', {}).get('name')) + "» готовий.\nНапиши Claude у сесії: «редизайнь секцію»"}))
                 except OSError as e:
                     print(f"[redesign] failed: {e}", flush=True)
                 continue
@@ -450,6 +454,8 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                     with open("/tmp/mistok-image-request.json", "w", encoding="utf-8") as f:
                         json.dump(req, f, ensure_ascii=False, indent=1)
                     print(f"[img] request: {len(req.get('slots') or [])} slots → /tmp/mistok-image-request.json", flush=True)
+                    await ws.send_str(json.dumps({"type": "chatreply",
+                        "text": "✨ Запит на " + str(len(req.get('slots') or [])) + " картинок готовий.\nНапиши Claude у сесії: «встав картинки»"}))
                 except OSError as e:
                     print(f"[img] request failed: {e}", flush=True)
                 continue
