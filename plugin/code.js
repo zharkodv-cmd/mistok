@@ -191,7 +191,7 @@ async function opFolders(roots, res) {
       const g = figma.group(c, parent);
       const t = g.findOne((x) => x.type === "TEXT" && x.characters.trim());
       g.name = t ? t.characters.trim().slice(0, 24) : "block";
-      res.changes.push("папка «" + g.name + "» (" + c.length + " ел.)");
+      res.changes.push("folder \"" + g.name + "\" (" + c.length + " items)");
     }
   }
 }
@@ -204,11 +204,11 @@ async function opClean(roots, res) {
   for (const n of walkAll(roots)) {
     if (typeof n.x === "number" && (n.x % 1 || n.y % 1)) {
       n.x = Math.round(n.x); n.y = Math.round(n.y);
-      res.changes.push(n.name + ": x/y → ціле");
+      res.changes.push(n.name + ": x/y → whole px");
     }
     if (typeof n.resize === "function" && n.type !== "TEXT" &&
         typeof n.width === "number" && (n.width % 1 || n.height % 1)) {
-      try { n.resize(Math.round(n.width), Math.round(n.height)); res.changes.push(n.name + ": w/h → ціле"); }
+      try { n.resize(Math.round(n.width), Math.round(n.height)); res.changes.push(n.name + ": w/h → whole px"); }
       catch (e) {}
     }
   }
@@ -224,8 +224,8 @@ async function opRename(roots, res) {
   }
   for (const g of groups.reverse()) {
     const nm = g.name; // після ungroup нода мертва — читати name не можна
-    try { figma.ungroup(g); res.changes.push("розгруповано " + nm); }
-    catch (e) { res.skipped.push(nm + " (ungroup)"); }
+    try { figma.ungroup(g); res.changes.push("ungrouped " + nm); }
+    catch (e) { res.skipped.push(nm + " (ungroup failed)"); }
   }
   // item: ≥3 дефолтних сусідів одного розміру = повторюваний елемент
   const itemNamed = new Set();
@@ -312,7 +312,7 @@ async function opSectionize(roots, res, params) {
   } else {
     const parent = roots[0].parent;
     if (!roots.every((n) => n.parent === parent)) {
-      throw new Error("виділені ноди мають різних батьків — виділи сусідів");
+      throw new Error("selected nodes have different parents — select siblings");
     }
     section = figma.createSection();
     const minX = Math.min(...roots.map((n) => n.x));
@@ -323,7 +323,7 @@ async function opSectionize(roots, res, params) {
     const t = roots.map((n) => n.findOne && n.findOne((c) => c.type === "TEXT" && c.characters.trim())).find(Boolean);
     section.name = t ? t.characters.trim().slice(0, 32) : "Section";
     for (const n of items) section.appendChild(n);
-    res.changes.push("створено секцію «" + section.name + "» (" + items.length + " ел.)");
+    res.changes.push("created section \"" + section.name + "\" (" + items.length + " items)");
   }
 
   items.sort((a, b) => a.y - b.y || a.x - b.x);
@@ -335,7 +335,7 @@ async function opSectionize(roots, res, params) {
     res.changes.push(n.name + " → x:" + pad + " y:" + Math.round(n.y));
   }
   section.resizeWithoutConstraints(maxW + pad * 2, y - gap + pad);
-  res.changes.push("секція " + Math.round(section.width) + "×" + Math.round(section.height) +
+  res.changes.push("section " + Math.round(section.width) + "×" + Math.round(section.height) +
     " (pad " + pad + ", gap " + gap + ")");
 }
 
@@ -368,7 +368,7 @@ async function opImgReuse(roots, res) {
       }
     }
   }
-  if (!pool.length) throw new Error("у файлі немає жодної картинки для повторного використання");
+  if (!pool.length) throw new Error("no images in the file to reuse");
 
   const tokenize = (s) => new Set((s.toLowerCase().match(/[a-zа-яіїєґ]{3,}/gi) || []));
   const contextTokens = (n) => {
@@ -407,7 +407,7 @@ async function opImgReuse(roots, res) {
     slot.fills = [{ type: "IMAGE", imageHash: best.hash, scaleMode: "FILL" }];
     res.changes.push(slot.name + " ← " + best.from + " (" + Math.round(best.w) + "×" + Math.round(best.h) + ")");
   }
-  if (!res.changes.length) res.skipped.push("плейсхолдерів не знайдено (імена ph/img/photo/… без дітей)");
+  if (!res.changes.length) res.skipped.push("no placeholders found (names ph/img/photo/… with no children)");
 }
 
 // ✨ запит на преміум-генерацію через Magnific — виконує Claude-сесія
@@ -430,13 +430,13 @@ async function opImgRequest(roots, res) {
     return { id: n.id, name: n.name, w: Math.round(n.width), h: Math.round(n.height),
              parent: parent ? parent.name : null, context: texts };
   });
-  if (!slots.length) throw new Error("плейсхолдерів не знайдено (імена ph/img/photo/… без дітей)");
+  if (!slots.length) throw new Error("no placeholders found (names ph/img/photo/… with no children)");
   res.request = {
     file: figma.root.name,
     frame: { id: roots[0].id, name: roots[0].name },
     slots,
   };
-  res.changes.push("запит на " + slots.length + " картинок → скажи Claude: «встав картинки»");
+  res.changes.push("request for " + slots.length + " images → tell Claude: \"insert the images\"");
 }
 
 // логічний auto-layout для фрейма з вільно розставленими дітьми
@@ -458,7 +458,7 @@ function alApply(f, res, floats) {
   for (const k of all) {
     (k.width * k.height > f.width * f.height * 0.85 ? bg : kids).push(k);
   }
-  if (kids.length < 2) { res.skipped.push(f.name + " (<2 елементів у потоці)"); return; }
+  if (kids.length < 2) { res.skipped.push(f.name + " (<2 elements in flow)"); return; }
 
   // кластеризація в рядки за перекриттям по y
   kids.sort((a, b) => a.y - b.y);
@@ -530,35 +530,55 @@ function alApply(f, res, floats) {
     if (f[p] > 0) alBind(f, p, floats, res);
   }
 
-  for (const b of bg) { b.layoutPositioning = "ABSOLUTE"; res.changes.push(b.name + " → absolute (фон)"); }
+  for (const b of bg) { b.layoutPositioning = "ABSOLUTE"; res.changes.push(b.name + " → absolute (background)"); }
   res.changes.push(f.name + ": " + dir + " gap:" + f.itemSpacing +
     " pad:" + [f.paddingTop, f.paddingRight, f.paddingBottom, f.paddingLeft].join(","));
 }
 
 async function opAutoLayout(roots, res) {
+  // кандидати: будь-які фрейми без AL з 2+ дітьми у всьому піддереві
   const targets = [];
-  for (const root of roots) {
-    if (root.type === "FRAME" && (!root.layoutMode || root.layoutMode === "NONE") && root.children.length > 1) {
-      targets.push(root);
-    } else if (root.type === "SECTION" || (root.type === "FRAME" && root.layoutMode !== "NONE")) {
-      for (const c of root.children) {
-        if (c.type === "FRAME" && (!c.layoutMode || c.layoutMode === "NONE") && c.children.length > 1) targets.push(c);
-      }
+  for (const n of walkAll(roots)) {
+    if (n.type === "FRAME" && (!n.layoutMode || n.layoutMode === "NONE") && n.children && n.children.length > 1) {
+      targets.push(n);
+      if (targets.length >= 24) break;
     }
   }
-  if (!targets.length) throw new Error("нема фреймів без auto-layout з 2+ дітьми");
+  if (!targets.length) throw new Error("no frames without auto-layout with 2+ children in the selection");
   const floats = await floatVarList();
   for (const f of targets) alApply(f, res, floats);
 }
 
-// вирівнювання по сітці фрейма: x/w до колонок layout grid, y до кратності 8
+// snap до колонок layout grid: x і ширина до червоних колонок; y не чіпаємо
 async function opGrid(roots, res) {
   for (const root of roots) {
-    const grid = (root.layoutGrids || []).find((g) => g.pattern === "COLUMNS" && g.visible !== false);
-    if (!grid || !root.children) { res.skipped.push(root.name + " (нема COLUMNS layout grid)"); continue; }
-    const count = grid.count, gutter = grid.gutterSize || 0, offset = grid.offset || 0;
-    const colW = (root.width - offset * 2 - gutter * (count - 1)) / count;
-    const colX = (i) => offset + i * (colW + gutter);
+    // сітку шукаємо на самому фреймі або вище по дереву
+    let host = root;
+    while (host && !(host.layoutGrids || []).some((g) => g.pattern === "COLUMNS" && g.visible !== false)) {
+      host = host.parent;
+      if (!host || host.type === "PAGE") { host = null; break; }
+    }
+    if (!host || !root.children) { res.skipped.push(root.name + " (no COLUMNS layout grid)"); continue; }
+    const grid = host.layoutGrids.find((g) => g.pattern === "COLUMNS" && g.visible !== false);
+    const count = grid.count, gutter = grid.gutterSize || 0;
+    let colW, colX0;
+    if (grid.alignment === "STRETCH") {
+      const offset = grid.offset || 0;
+      colW = (host.width - offset * 2 - gutter * (count - 1)) / count;
+      colX0 = offset;
+    } else if (grid.alignment === "CENTER") {
+      colW = grid.sectionSize || 60;
+      const total = count * colW + (count - 1) * gutter;
+      colX0 = (host.width - total) / 2;
+    } else { // MIN / MAX
+      colW = grid.sectionSize || 60;
+      colX0 = grid.alignment === "MAX"
+        ? host.width - (grid.offset || 0) - (count * colW + (count - 1) * gutter)
+        : (grid.offset || 0);
+    }
+    // координати дітей root у системі host
+    const shift = host === root ? 0 : (root.absoluteTransform[0][2] - host.absoluteTransform[0][2]);
+    const colX = (i) => colX0 + i * (colW + gutter);
     const snapX = (x) => {
       let best = colX(0), bd = Infinity;
       for (let i = 0; i < count; i++) { const d = Math.abs(colX(i) - x); if (d < bd) { bd = d; best = colX(i); } }
@@ -575,16 +595,17 @@ async function opGrid(roots, res) {
     };
     for (const n of root.children) {
       if (typeof n.x !== "number") continue;
-      const nx = snapX(n.x), ny = Math.round(n.y / 8) * 8;
+      const hx = n.x + shift;                 // x у координатах host
+      const nx = snapX(hx) - shift;
       const nw = typeof n.resize === "function" && n.type !== "TEXT" ? snapW(n.width) : null;
-      const moved = Math.abs(nx - n.x) > 0.5 || Math.abs(ny - n.y) > 0.5;
+      const moved = Math.abs(nx - n.x) > 0.5;
       const sized = nw !== null && Math.abs(nw - n.width) > 0.5;
-      if (moved) { n.x = nx; n.y = ny; }
+      if (moved) n.x = nx;
       if (sized) { try { n.resize(nw, n.height); } catch (e) {} }
-      if (moved || sized) res.changes.push(n.name + " → x:" + nx + (sized ? " w:" + nw : ""));
+      if (moved || sized) res.changes.push(n.name + " → x:" + Math.round(nx + shift) + (sized ? " w:" + nw : ""));
     }
   }
-  if (!res.changes.length && !res.skipped.length) res.skipped.push("нічого вирівнювати");
+  if (!res.changes.length && !res.skipped.length) res.skipped.push("nothing to align");
 }
 
 // збір текстів на вичитку — виконує headless Claude через bridge
@@ -596,10 +617,10 @@ async function opSpell(roots, res) {
     if (s && s.trim().length >= 2) texts.push({ id: n.id, text: s.slice(0, 500) });
     if (texts.length >= 120) break;
   }
-  if (!texts.length) throw new Error("у виділеному немає текстів");
+  if (!texts.length) throw new Error("no texts in the selection");
   res.request = null; // не Magnific-запит
   res.spell = { texts };
-  res.changes.push("на вичитку: " + texts.length + " текстів → Claude працює у фоні");
+  res.changes.push("sent to spellcheck: " + texts.length + " texts → Claude runs in background");
 }
 
 // запит на редизайн секції за референсами awwwards — виконує Claude-сесія
@@ -609,10 +630,10 @@ async function opRedesign(roots, res) {
   res.redesign = {
     frame: { id: root.id, name: root.name, w: Math.round(root.width), h: Math.round(root.height) },
     spec,
-    instruction: "awwwards SOTD/honorable mentions → знайти 2-3 схожі за сенсом секції → " +
-      "перемалювати цю секцію у їхньому дусі нашими variables/text styles/асетами, варіанти поруч",
+    instruction: "awwwards SOTD/honorable mentions → find 2-3 sections similar in meaning → " +
+      "redraw this section in their spirit using our variables/text styles/assets, variants placed next to the original",
   };
-  res.changes.push("запит на редизайн «" + root.name + "» → скажи Claude: «редизайнь секцію»");
+  res.changes.push("redesign request \"" + root.name + "\" → tell Claude: \"redesign the section\"");
 }
 
 // запит на прототип із вайрфрейму/скетчу/текстів — виконує Claude-сесія
@@ -622,11 +643,11 @@ async function opPrototype(roots, res) {
   res.prototype = {
     frame: { id: root.id, name: root.name, w: Math.round(root.width), h: Math.round(root.height) },
     spec,
-    instruction: "зібрати сучасний мінімалістичний прототип: Inter, чорно-біло-сірий, повний auto-layout, " +
-      "всі тексти і логіка джерела; якщо джерело — бітмап, зняти shot і прочитати візуально; " +
-      "будувати поруч із джерелом",
+    instruction: "build a modern minimalist prototype: Inter, black/white/gray, full auto-layout, " +
+      "all texts and logic of the source; if the source is a bitmap, take a shot and read it visually; " +
+      "build next to the source",
   };
-  res.changes.push("запит на прототип «" + root.name + "» → скажи Claude: «зроби прототип»");
+  res.changes.push("prototype request \"" + root.name + "\" → tell Claude: \"build the prototype\"");
 }
 
 const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor,
@@ -912,19 +933,19 @@ figma.ui.onmessage = async (msg) => {
   }
   if (msg.type === "undo") {
     figma.triggerUndo();
-    figma.notify("↩ відкат");
+    figma.notify("↩ undone");
     return;
   }
   if (msg.type === "op") {
     const sel = figma.currentPage.selection;
-    if (!sel.length) { figma.notify("Нічого не виділено"); return; }
+    if (!sel.length) { figma.notify("Nothing selected"); return; }
     const fn = OPS[msg.kind];
     if (!fn) return;
     const res = { changes: [], skipped: [] };
     try {
       await fn(sel, res, msg.params || {});
-      const summary = OP_NAMES[msg.kind] + ": " + res.changes.length + " змін" +
-        (res.skipped.length ? ", " + res.skipped.length + " пропущено" : "");
+      const summary = OP_NAMES[msg.kind] + ": " + res.changes.length + " changes" +
+        (res.skipped.length ? ", " + res.skipped.length + " skipped" : "");
       figma.notify(summary);
       figma.ui.postMessage({
         type: "opreport", kind: msg.kind, summary,
@@ -937,9 +958,9 @@ figma.ui.onmessage = async (msg) => {
       if (res.prototype) figma.ui.postMessage({ type: "protorequest", request: res.prototype });
       figma.commitUndo(); // кожна операція = окремий крок undo
     } catch (e) {
-      figma.notify("Помилка " + OP_NAMES[msg.kind] + ": " + ((e && e.message) || e));
+      figma.notify("Error " + OP_NAMES[msg.kind] + ": " + ((e && e.message) || e));
       figma.ui.postMessage({ type: "opreport", kind: msg.kind, error: true,
-        summary: "помилка: " + ((e && e.message) || e), changes: [], skipped: [] });
+        summary: "error: " + ((e && e.message) || e), changes: [], skipped: [] });
     }
     return;
   }
@@ -949,15 +970,15 @@ figma.ui.onmessage = async (msg) => {
   }
   if (msg.type === "shotsel") {
     const sel = figma.currentPage.selection;
-    if (!sel.length) { figma.notify("Нічого не виділено"); return; }
+    if (!sel.length) { figma.notify("Nothing selected"); return; }
     const n = sel[0];
     try {
       const bytes = await n.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 } });
       const name = (n.name || "node").replace(/[^\wЀ-ӿ-]+/g, "-").slice(0, 40) + ".png";
       figma.ui.postMessage({ type: "file", name, b64: figma.base64Encode(bytes) });
-      figma.notify("PNG → буфер (⌘V) + mistok-shots: " + name);
+      figma.notify("PNG → clipboard (⌘V) + mistok-shots: " + name);
     } catch (e) {
-      figma.notify("Експорт не вдався: " + ((e && e.message) || e));
+      figma.notify("Export failed: " + ((e && e.message) || e));
     }
     return;
   }

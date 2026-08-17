@@ -185,9 +185,9 @@
     <span id="dot" class="pending"></span>
     <span id="brand">Mistok</span>
     <span id="status" title="ws://localhost:8787/plugin">connecting…</span>
-    <span id="count" title="виконань за сесію bridge">0</span>
-    <button id="undoBtn" data-tip="Undo" title="Відкотити останню дію (triggerUndo)"></button>
-    <button id="toggle" title="Згорнути / розгорнути">–</button>
+    <span id="count" title="execs this bridge session">0</span>
+    <button id="undoBtn" data-tip="Undo" title="Undo last action (triggerUndo)"></button>
+    <button id="toggle" title="Collapse / expand">–</button>
   </div>
   <div id="busy"></div>
   <div id="tasks"></div>
@@ -197,25 +197,25 @@
   <div id="secform">
     <label>pad <input id="secPad" type="number" value="250"></label>
     <label>gap <input id="secGap" type="number" value="100"></label>
-    <button id="secApply" title="Загорнути в секцію і розкласти">→ Section</button>
+    <button id="secApply" title="Wrap into a section and lay out">→ Section</button>
   </div>
   <div id="summary"></div>
   <div id="chatOut"></div>
   <div id="chatRow">
-    <input id="chatIn" type="text" placeholder="Спитай Claude… (Enter)">
+    <input id="chatIn" type="text" placeholder="Ask Claude… (Enter)">
   </div>
   <div id="chatMeta">
     <span class="mlabel">✦</span>
-    <select id="mSel" title="Модель для чат-задач">
-      <option value="">авто</option>
+    <select id="mSel" title="Model for chat tasks">
+      <option value="">auto</option>
       <option value="haiku">haiku</option>
       <option value="sonnet">sonnet</option>
       <option value="opus">opus</option>
       <option value="claude-fable-5">fable</option>
     </select>
     <span class="mlabel">⚡</span>
-    <select id="eSel" title="Effort для чат-задач">
-      <option value="">авто</option>
+    <select id="eSel" title="Effort for chat tasks">
+      <option value="">auto</option>
       <option value="low">low</option>
       <option value="medium">medium</option>
       <option value="high">high</option>
@@ -259,8 +259,8 @@ function renderTasks() {
     busySince = Date.now();
     bar.classList.add("on");
     line.classList.add("on");
-    line.textContent = "▸ " + labels[0] + (labels.length > 1 ? "  ·  у черзі: " + (labels.length - 1) : "");
-    statusEl.textContent = "виконую…";
+    line.textContent = "▸ " + labels[0] + (labels.length > 1 ? "  ·  queued: " + (labels.length - 1) : "");
+    statusEl.textContent = "working…";
   } else {
     const wait = Math.max(0, 700 - (Date.now() - busySince));
     setTimeout(() => {
@@ -298,7 +298,7 @@ function renderStats(s) {
   if (s.execs != null) {
     execCount = s.execs;
     setCount(s.execs);
-    countEl.title = "виконань за сесію bridge" +
+    countEl.title = "execs this bridge session" +
                     (s.avg_ms != null ? " · avg " + s.avg_ms + "ms" : "") +
                     (s.errors ? " · errors " + s.errors : "");
   }
@@ -412,12 +412,12 @@ chatIn.onkeydown = (e) => {
   if (e.key !== "Enter") return;
   const text = chatIn.value.trim();
   if (!text) return;
-  if (!ws || ws.readyState !== WebSocket.OPEN) { chatShow("bridge не підключений", false); return; }
+  if (!ws || ws.readyState !== WebSocket.OPEN) { chatShow("bridge disconnected", false); return; }
   ws.send(JSON.stringify({ type: "chat", text, model: mSel.value || null, effort: eSel.value || null }));
   chatIn.value = "";
   const isUrl = text.startsWith("http://") || text.startsWith("https://");
-  startTask("chat", isUrl ? "імпорт сторінки…" : "Claude: " + text.slice(0, 28) + "…");
-  chatShow("думаю…", true);
+  startTask("chat", isUrl ? "importing page…" : "Claude: " + text.slice(0, 28) + "…");
+  chatShow("thinking…", true);
 };
 
 // ── selection row ────────────────────────────────────────────────────────
@@ -460,18 +460,18 @@ const ICONS = {
   wait: "⏳",
 };
 const OP_BTNS = [
-  { kind: "clean", tip: "Clean", title: "Логічні папки + rename (bg/image/item…) + розгрупування + цілі px" },
-  { kind: "varsal", tip: "Spacing", title: "Auto-layout відступи/гапи → найближчі variables" },
-  { kind: "varscolor", tip: "Colors", title: "Кольори/текст → найближчі variables" },
-  { kind: "textstyle", tip: "Styles", title: "Текстові ноди → локальні Text Styles (family+style+size)" },
-  { kind: "autolayout", tip: "Layout", title: "Логічно організувати вільні елементи фрейма в auto-layout (рядки/колонки, фон → absolute)" },
-  { kind: "sectionize", tip: "Section", title: "Загорнути виділене в Section і розкласти (pad/gap нижче)" },
-  { kind: "grid", tip: "Grid", title: "Вирівняти дітей по layout grid фрейма (x/w до колонок, y до 8px)" },
-  { kind: "imgreuse", tip: "Reuse", title: "Плейсхолдери ← релевантні картинки з усього файлу" },
-  { kind: "imggen", tip: "Magnific", title: "Запит на преміум-картинки через Magnific → виконує Claude" },
-  { kind: "spell", tip: "Spell", title: "Вичитка всіх текстів headless-Claude'ом: помилки виправляються автоматично" },
-  { kind: "redesign", tip: "Redesign", title: "Запит на редизайн секції за референсами awwwards → виконує Claude" },
-  { kind: "prototype", tip: "Prototype", title: "З вайрфрейму/скетчу/текстів → мінімалістичний ч/б прототип (Inter) → виконує Claude" },
+  { kind: "clean", tip: "Clean", title: "Logical folders + rename (bg/image/item…) + ungroup + whole px" },
+  { kind: "varsal", tip: "Spacing", title: "Auto-layout paddings/gaps → nearest variables" },
+  { kind: "varscolor", tip: "Colors", title: "Colors/text → nearest variables (scope-aware)" },
+  { kind: "textstyle", tip: "Styles", title: "Text nodes → local Text Styles (family+style+size)" },
+  { kind: "autolayout", tip: "Layout", title: "Organize free-placed elements into logical auto-layout (rows/cols, bg → absolute)" },
+  { kind: "sectionize", tip: "Section", title: "Wrap selection into a Section (pad/gap below)" },
+  { kind: "grid", tip: "Grid", title: "Snap children to the frame layout grid (x/w to columns, y to 8px)" },
+  { kind: "imgreuse", tip: "Reuse", title: "Placeholders ← relevant images from the whole file" },
+  { kind: "imggen", tip: "Magnific", title: "Premium photo request via Magnific → executed by Claude" },
+  { kind: "spell", tip: "Spell", title: "Spellcheck all texts via headless Claude: fixes applied automatically" },
+  { kind: "redesign", tip: "Redesign", title: "Section redesign request with awwwards references → executed by Claude" },
+  { kind: "prototype", tip: "Prototype", title: "Wireframe/sketch/texts → minimalist b/w prototype (Inter) → executed by Claude" },
 ];
 function renderOps(show) {
   const el = document.getElementById("ops");
@@ -514,8 +514,8 @@ function renderSel(m) {
     '<span class="selname">' + escHtml(n.name) + "</span>" +
     '<span class="selmeta">' + n.w + "×" + n.h + more + "</span>" +
     '<button id="copySel" data-tip="Copy id" title="Copy node id">' + ICONS.copy + "</button>" +
-    '<button id="implSel" data-tip="Implement" title="Скопіювати промпт «імплементуй цей дизайн» для Claude Code">' + ICONS.impl + "</button>" +
-    '<button id="shotSel" data-tip="Shot" title="PNG @2x → буфер + Desktop/mistok-shots">' + ICONS.shot + "</button>";
+    '<button id="implSel" data-tip="Implement" title="Copy an implement-this-design prompt for Claude Code">' + ICONS.impl + "</button>" +
+    '<button id="shotSel" data-tip="Shot" title="PNG @2x → clipboard + Desktop/mistok-shots">' + ICONS.shot + "</button>";
   const copyBtn = document.getElementById("copySel");
   copyBtn.onclick = (e) => {
     e.stopPropagation();
@@ -528,11 +528,11 @@ function renderSel(m) {
     const list = m.nodes.map((x) => "`" + x.id + "` «" + x.name + "» (" + x.w + "×" + x.h + ")").join(", ");
     const ids = m.nodes.map((x) => x.id);
     copyText(
-      "Імплементуй цей дизайн з Figma (Mistok bridge):\n" +
-      "- нода" + (ids.length > 1 ? "и" : "") + ": " + list + "\n" +
-      "- спека: mistok spec " + ids[0] + " --depth 6\n" +
-      "- скріншот: mistok shot " + ids[0] + " /tmp/design.png --scale 2\n" +
-      "Дотримуйся правил проєкту (.claude/rules/mistok.md): точні тексти, кольори як variables, spacing у rem."
+      "Implement this design from Figma (Mistok bridge):\n" +
+      "- node" + (ids.length > 1 ? "s" : "") + ": " + list + "\n" +
+      "- spec: mistok spec " + ids[0] + " --depth 6\n" +
+      "- screenshot: mistok shot " + ids[0] + " /tmp/design.png --scale 2\n" +
+      "Follow the project rules (.claude/rules/mistok.md): exact texts, colors as variables, spacing in rem."
     );
     flash(implBtn, ICONS.ok, ICONS.impl);
   };
@@ -599,11 +599,11 @@ window.onmessage = (e) => {
   }
   if (m.type === "result") log(`[ok]  ${shortId(m.id)}`);
   else if (m.type === "error") log(`[err] ${shortId(m.id)} ${m.text}`);
-  else if (m.type === "file") log(`[shot] ${m.name} → буфер + mistok-shots`);
+  else if (m.type === "file") log(`[shot] ${m.name} → clipboard + mistok-shots`);
   else if (m.type === "opreport") {
     endTask("op:" + m.kind);
     // фонова вичитка триває після opreport — тримаємо лоадер до chatreply
-    if (m.kind === "spell" && !m.error) startTask("bg:spell", "вичитка текстів (Claude)…");
+    if (m.kind === "spell" && !m.error) startTask("bg:spell", "spellchecking (Claude)…");
   }
   else if (m.type === "log") {/* skip — would spam */}
 };

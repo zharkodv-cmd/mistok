@@ -176,7 +176,7 @@ async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effo
     """Headless Claude Code turn triggered from the plugin's chat input."""
     global CHAT_BUSY
     if CHAT_BUSY:
-        await ws.send_str(json.dumps({"type": "chatreply", "text": "⏳ попередній запит ще виконується"}))
+        await ws.send_str(json.dumps({"type": "chatreply", "text": "⏳ previous request still running"}))
         return
     CHAT_BUSY = True
     try:
@@ -185,7 +185,7 @@ async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effo
         env["PATH"] = env.get("PATH", "") + ":/opt/homebrew/bin:/usr/local/bin"
         claude = shutil.which("claude", path=env["PATH"])
         if not claude:
-            await ws.send_str(json.dumps({"type": "chatreply", "text": "claude CLI не знайдено в PATH"}))
+            await ws.send_str(json.dumps({"type": "chatreply", "text": "claude CLI not found in PATH"}))
             return
         opts = []
         if model:
@@ -194,13 +194,14 @@ async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effo
             opts += ["--effort", effort]
         label = " · ".join(filter(None, [model, effort]))
         await ws.send_str(json.dumps({"type": "chatstatus",
-                                      "text": "думаю…" + (f" ({label})" if label else "")}))
+                                      "text": "thinking…" + (f" ({label})" if label else "")}))
         cwd = str(Path.home() / "Code" / "mistok")
 
         async def attempt(extra):
             proc = await asyncio.create_subprocess_exec(
                 claude, "-p", text, "--dangerously-skip-permissions", *opts, *extra,
                 cwd=cwd, env=env,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
             try:
@@ -214,7 +215,7 @@ async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effo
         out, err = await attempt(["--continue"])
         if out is None and err != "timeout 300s":
             out, err = await attempt([])  # перша розмова в цьому cwd — без --continue
-        reply = out or f"(порожня відповідь{': ' + err[:300] if err else ''})"
+        reply = out or f"(empty reply{': ' + err[:300] if err else ''})"
         await ws.send_str(json.dumps({"type": "chatreply", "text": reply[:6000]}))
         print(f"[chat] {len(text)}b → {len(reply)}b", flush=True)
     except Exception as e:
@@ -231,16 +232,17 @@ async def run_import(ws: web.WebSocketResponse, url: str):
     try:
         home = Path.home() / "Code" / "mistok"
         py = str(home / "venv" / "bin" / "python")
-        await ws.send_str(json.dumps({"type": "chatstatus", "text": "імпортую " + url + " …"}))
+        await ws.send_str(json.dumps({"type": "chatstatus", "text": "importing " + url + " …"}))
         proc = await asyncio.create_subprocess_exec(
             py, str(home / "webimport.py"), url, cwd=str(home),
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=180)
         except asyncio.TimeoutError:
             proc.kill()
-            await ws.send_str(json.dumps({"type": "chatreply", "text": "імпорт: таймаут 180с"}))
+            await ws.send_str(json.dumps({"type": "chatreply", "text": "import: timeout 180s"}))
             return
         tail = (out.decode("utf-8", "replace").strip().splitlines() or ["(порожньо)"])[-1]
         if proc.returncode != 0:
@@ -253,6 +255,7 @@ async def run_import(ws: web.WebSocketResponse, url: str):
 
 async def run_spell(ws: web.WebSocketResponse, texts: list):
     """Вичитка текстів headless-Claude'ом і автозастосування виправлень."""
+    print(f"[spell] start: {len(texts)} texts", flush=True)
     try:
         import shutil
         env = dict(os.environ)
@@ -261,25 +264,29 @@ async def run_spell(ws: web.WebSocketResponse, texts: list):
         if not claude:
             return
         prompt = (
-            "Ти коректор. Виправ орфографічні, граматичні й пунктуаційні помилки в текстах нижче. "
-            "Мову кожного тексту зберігай (українська лишається українською, англійська англійською). "
-            "Зміст, тон і довжину не міняй — тільки помилки. "
-            "Поверни ВИКЛЮЧНО JSON-масив виправлень без пояснень, тільки для текстів зі змінами: "
-            '[{"id":"<id>","fixed":"<виправлений текст>"}]. Якщо помилок немає — поверни []. '
-            "Тексти: " + json.dumps(texts, ensure_ascii=False)
+            "You are a proofreader. Fix spelling, grammar and punctuation errors in the texts below. "
+            "Preserve each text's language (Ukrainian stays Ukrainian, English stays English). "
+            "Do not change meaning, tone or length — only fix errors. "
+            "Return ONLY a JSON array of fixes, no explanations, only for texts that changed: "
+            '[{"id":"<id>","fixed":"<corrected text>"}]. If there are no errors, return []. '
+            "Texts: " + json.dumps(texts, ensure_ascii=False)
         )
+        print("[spell] spawning claude…", flush=True)
         proc = await asyncio.create_subprocess_exec(
             claude, "-p", prompt, "--model", "haiku", "--dangerously-skip-permissions",
             cwd=str(Path.home()), env=env,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         try:
             out, _err = await asyncio.wait_for(proc.communicate(), timeout=240)
         except asyncio.TimeoutError:
             proc.kill()
-            await ws.send_str(json.dumps({"type": "chatreply", "text": "Вичитка: таймаут"}))
+            print("[spell] TIMEOUT 240s", flush=True)
+            await ws.send_str(json.dumps({"type": "chatreply", "text": "Spellcheck: timeout"}))
             return
         raw = out.decode("utf-8", "replace")
+        print(f"[spell] claude done, {len(raw)}b out", flush=True)
         start, end = raw.find("["), raw.rfind("]")
         fixes = []
         if start != -1 and end > start:
@@ -289,7 +296,7 @@ async def run_spell(ws: web.WebSocketResponse, texts: list):
             except json.JSONDecodeError:
                 pass
         if not fixes:
-            await ws.send_str(json.dumps({"type": "chatreply", "text": "Вичитка: помилок не знайдено ✓"}))
+            await ws.send_str(json.dumps({"type": "chatreply", "text": "Spellcheck: no errors found ✓"}))
             print("[spell] no fixes", flush=True)
             return
         code = (
@@ -301,7 +308,7 @@ async def run_spell(ws: web.WebSocketResponse, texts: list):
             "  try { await h.setText(n, f.fixed); ok++; } catch (e) { miss.push(f.id); }"
             "}"
             "figma.commitUndo();"
-            "figma.notify('Вичитка: ' + ok + ' виправлень' + (miss.length ? ', ' + miss.length + ' пропущено' : ''));"
+            "figma.notify('Spellcheck: ' + ok + ' fixes' + (miss.length ? ', ' + miss.length + ' skipped' : ''));"
             "return { ok, missed: miss.length };"
         )
         # синхронний urllib у to_thread — інакше дедлок із власним event loop
@@ -309,7 +316,7 @@ async def run_spell(ws: web.WebSocketResponse, texts: list):
             urllib_request_json, "http://127.0.0.1:8787/exec", {"code": code, "timeout": 60})
         n_ok = (req.get("value") or {}).get("ok", 0)
         await ws.send_str(json.dumps({"type": "chatreply",
-                                      "text": f"Вичитка: {n_ok} виправлень із {len(fixes)} запропонованих"}))
+                                      "text": f"Spellcheck: {n_ok} of {len(fixes)} fixes applied"}))
         print(f"[spell] applied {n_ok}/{len(fixes)}", flush=True)
     except Exception as e:
         print(f"[spell] failed: {e}", flush=True)
@@ -437,7 +444,7 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                         json.dump(req, f, ensure_ascii=False, indent=1)
                     print(f"[proto] request: {req.get('frame', {}).get('name')} → /tmp/mistok-prototype-request.json", flush=True)
                     await ws.send_str(json.dumps({"type": "chatreply",
-                        "text": "▭ Запит на прототип «" + str(req.get('frame', {}).get('name')) + "» готовий.\nНапиши Claude у сесії: «зроби прототип»"}))
+                        "text": "▭ Prototype request for \"" + str(req.get('frame', {}).get('name')) + "\" is ready.\nTell Claude in a session: build the prototype"}))
                 except OSError as e:
                     print(f"[proto] failed: {e}", flush=True)
                 continue
@@ -449,7 +456,7 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                         json.dump(req, f, ensure_ascii=False, indent=1)
                     print(f"[redesign] request: {req.get('frame', {}).get('name')} → /tmp/mistok-redesign-request.json", flush=True)
                     await ws.send_str(json.dumps({"type": "chatreply",
-                        "text": "⟳ Запит на редизайн «" + str(req.get('frame', {}).get('name')) + "» готовий.\nНапиши Claude у сесії: «редизайнь секцію»"}))
+                        "text": "⟳ Redesign request for \"" + str(req.get('frame', {}).get('name')) + "\" is ready.\nTell Claude in a session: redesign the section"}))
                 except OSError as e:
                     print(f"[redesign] failed: {e}", flush=True)
                 continue
@@ -462,7 +469,7 @@ async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
                         json.dump(req, f, ensure_ascii=False, indent=1)
                     print(f"[img] request: {len(req.get('slots') or [])} slots → /tmp/mistok-image-request.json", flush=True)
                     await ws.send_str(json.dumps({"type": "chatreply",
-                        "text": "✨ Запит на " + str(len(req.get('slots') or [])) + " картинок готовий.\nНапиши Claude у сесії: «встав картинки»"}))
+                        "text": "✨ Request for " + str(len(req.get('slots') or [])) + " images is ready.\nTell Claude in a session: insert the images"}))
                 except OSError as e:
                     print(f"[img] request failed: {e}", flush=True)
                 continue
