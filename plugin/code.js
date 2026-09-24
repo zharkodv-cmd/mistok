@@ -1,4 +1,5 @@
-const UI_SIZE = { open: { w: 320, h: 236 }, mini: { w: 126, h: 36 } };
+// open: висота авто під контент, стеля maxH (= MAX_H в ui.html — там чат стискається під неї)
+const UI_SIZE = { open: { w: 320, h: 236, maxH: 600 }, mini: { w: 126, h: 36 } };
 figma.showUI(__html__, { width: UI_SIZE.open.w, height: UI_SIZE.open.h, title: "Mistok" });
 
 // відновити згорнутий стан і префи з минулого запуску
@@ -33,16 +34,15 @@ sendSelection();
 
 // ─── selection ops (кнопки в UI) ─────────────────────────────────────────
 
+// значення в дефолтному моді; аліаси розгортаються ланцюжком (semantic → primitive → …)
 async function resolveVarValue(v) {
-  const col = await figma.variables.getVariableCollectionByIdAsync(v.variableCollectionId);
-  let val = v.valuesByMode[col.defaultModeId];
-  if (val && val.type === "VARIABLE_ALIAS") {
-    const t = await figma.variables.getVariableByIdAsync(val.id);
-    if (!t) return undefined;
-    const tc = await figma.variables.getVariableCollectionByIdAsync(t.variableCollectionId);
-    val = t.valuesByMode[tc.defaultModeId];
+  for (let hop = 0; v && hop < 10; hop++) {
+    const col = await figma.variables.getVariableCollectionByIdAsync(v.variableCollectionId);
+    const val = v.valuesByMode[col.defaultModeId];
+    if (!val || val.type !== "VARIABLE_ALIAS") return val;
+    v = await figma.variables.getVariableByIdAsync(val.id);
   }
-  return val;
+  return undefined;
 }
 
 async function floatVarList() {
@@ -63,9 +63,17 @@ async function colorVarList() {
   return out;
 }
 
-// скоупи у файлі розставлені — біндимо тільки в межах свого скоупа
+// біндимо тільки в межах скоупа змінної. Порожні scopes = змінна схована з усіх пікерів
+// (примітиви під аліасами) — такі не біндимо ніколи; ALL_FILLS покриває всі заливки
 function inScope(e, scope) {
-  return !e.scopes || !e.scopes.length || e.scopes.includes("ALL_SCOPES") || e.scopes.includes(scope);
+  const s = e.scopes || [];
+  return s.includes("ALL_SCOPES") || s.includes(scope) || (s.includes("ALL_FILLS") && /_FILL$/.test(scope));
+}
+
+// нода всередині інстанса: структуру/позиції міняти не можна (оверрайди імен і заливок — можна)
+function inInstance(n) {
+  for (let p = n.parent; p && p.type !== "PAGE"; p = p.parent) if (p.type === "INSTANCE") return true;
+  return false;
 }
 
 // точний збіг, інакше найближче в межах max(2, 10%) — лише серед свого скоупа
@@ -112,8 +120,9 @@ async function opVarsAL(roots, res) {
       if (typeof cur !== "number" || cur === 0) continue;
       if (n.boundVariables && n.boundVariables[p]) continue; // вже прив'язано
       const m = nearestNum(floats, cur, "GAP");
-      if (m) { n.setBoundVariable(p, m.v); res.changes.push(n.name + "." + p + ": " + cur + " → " + m.v.name); }
-      else res.skipped.push(n.name + "." + p + "=" + cur);
+      if (!m) { res.skipped.push(n.name + "." + p + "=" + cur); continue; }
+      try { n.setBoundVariable(p, m.v); res.changes.push(n.name + "." + p + ": " + cur + " → " + m.v.name); }
+      catch (e) { res.skipped.push(n.name + "." + p + " (locked)"); } // напр. всередині інстанса
     }
   }
 }
@@ -143,7 +152,9 @@ async function opVarsColor(roots, res) {
           res.skipped.push(n.name + "." + prop + "[" + i + "]");
         }
       }
-      if (arr) n[prop] = arr;
+      if (arr) {
+        try { n[prop] = arr; } catch (e) { res.skipped.push(n.name + "." + prop + " (locked)"); }
+      }
     }
     // текст: fontSize / lineHeight — тільки точний збіг
     if (n.type === "TEXT" && typeof n.fontName !== "symbol") {
@@ -174,6 +185,7 @@ async function opFolders(roots, res) {
   for (const parent of walkAll(roots)) {
     if (!parent.children || parent.children.length < 4) continue;
     if (parent.layoutMode && parent.layoutMode !== "NONE") continue;
+    if (parent.type === "INSTANCE" || inInstance(parent)) continue;
     const flow = parent.children.filter((k) =>
       typeof k.width === "number" && k.visible !== false &&
       !(k.width * k.height >= parent.width * parent.height * 0.6)); // bg лишається зверху
@@ -198,36 +210,50 @@ async function opFolders(roots, res) {
   }
 }
 
+// дробові px, які Clean правит і Lint показує: x/y вільних нод (в auto-layout позиція похідна),
+// w/h не-текстів з FIXED-розмірами (resize перетворив би HUG/FILL на FIXED)
+function freePos(n) {
+  return typeof n.x === "number" && (!n.parent || !n.parent.layoutMode || n.parent.layoutMode === "NONE" ||
+    n.layoutPositioning === "ABSOLUTE");
+}
+function fixedSize(n) {
+  return typeof n.resize === "function" && n.type !== "TEXT" && typeof n.width === "number" &&
+    (!n.layoutSizingHorizontal || (n.layoutSizingHorizontal === "FIXED" && n.layoutSizingVertical === "FIXED"));
+}
+
 // Clean = логічні папки + розгрупування зайвого + осмислені імена + цілі px.
 // Auto-layout і variables — окремими кнопками (⚏, ⇥, 🎨).
 async function opClean(roots, res) {
   await opFolders(roots, res);
-  await opRename(roots, res);
+  roots = await opRename(roots, res);
   for (const n of walkAll(roots)) {
-    if (typeof n.x === "number" && (n.x % 1 || n.y % 1)) {
+    if (inInstance(n)) continue;
+    if (freePos(n) && (n.x % 1 || n.y % 1)) {
       n.x = Math.round(n.x); n.y = Math.round(n.y);
       res.changes.push(n.name + ": x/y → whole px");
     }
-    if (typeof n.resize === "function" && n.type !== "TEXT" &&
-        typeof n.width === "number" && (n.width % 1 || n.height % 1)) {
-      try { n.resize(Math.round(n.width), Math.round(n.height)); res.changes.push(n.name + ": w/h → whole px"); }
+    if (fixedSize(n) && (n.width % 1 || n.height % 1)) {
+      try { n.resize(Math.max(1, Math.round(n.width)), Math.max(1, Math.round(n.height))); res.changes.push(n.name + ": w/h → whole px"); }
       catch (e) {}
     }
   }
 }
 
+// повертає roots: виділена дефолтна група після ungroup замінюється своїми дітьми
 async function opRename(roots, res) {
   const DEFAULT_RE = DEFAULT_NAME_RE;
   // розгрупування: GROUP з дефолтною назвою, найглибші перші (ungroup зберігає дітей)
   const groups = [];
   for (const n of walkAll(roots)) {
-    if (n.type === "GROUP" && DEFAULT_RE.test(n.name)) groups.push(n);
+    if (n.type === "GROUP" && DEFAULT_RE.test(n.name) && !inInstance(n)) groups.push(n);
   }
+  const freed = new Map(); // group → її діти після ungroup
   for (const g of groups.reverse()) {
     const nm = g.name; // після ungroup нода мертва — читати name не можна
-    try { figma.ungroup(g); res.changes.push("ungrouped " + nm); }
+    try { freed.set(g, figma.ungroup(g)); res.changes.push("ungrouped " + nm); }
     catch (e) { res.skipped.push(nm + " (ungroup failed)"); }
   }
+  roots = roots.flatMap((r) => freed.get(r) || [r]).filter((r) => !r.removed);
   // item: ≥3 дефолтних сусідів одного розміру = повторюваний елемент
   const itemNamed = new Set();
   const parents = new Set();
@@ -266,6 +292,7 @@ async function opRename(roots, res) {
     }
     if (name && name !== n.name) { res.changes.push(n.name + " → " + name); n.name = name; }
   }
+  return roots;
 }
 
 // текстові ноди → локальні Text Styles (збіг family+style+size, уточнення за lineHeight)
@@ -303,8 +330,9 @@ async function opTextStyles(roots, res) {
 
 // загорнути виділене в SECTION і розкласти вертикально (pad всередині, gap між)
 async function opSectionize(roots, res, params) {
-  const pad = Number(params && params.pad) || 250;
-  const gap = Number(params && params.gap) || 100;
+  const num = (v, d) => (v === "" || v == null || !Number.isFinite(+v) ? d : Math.max(0, +v)); // 0 — валідне
+  const pad = num(params.pad, 250);
+  const gap = num(params.gap, 100);
 
   let section, items;
   if (roots.length === 1 && roots[0].type === "SECTION") {
@@ -314,6 +342,9 @@ async function opSectionize(roots, res, params) {
     const parent = roots[0].parent;
     if (!roots.every((n) => n.parent === parent)) {
       throw new Error("selected nodes have different parents — select siblings");
+    }
+    if (parent.type !== "PAGE" && parent.type !== "SECTION") {
+      throw new Error("sections live on the canvas or in sections — select top-level nodes");
     }
     section = figma.createSection();
     const minX = Math.min(...roots.map((n) => n.x));
@@ -328,7 +359,7 @@ async function opSectionize(roots, res, params) {
   }
 
   items.sort((a, b) => a.y - b.y || a.x - b.x);
-  const cols = Math.max(1, Number(params && params.cols) || 1);
+  const cols = Math.max(1, Math.round(num(params.cols, 1)));
   let y = pad, maxRight = 0;
   for (let r = 0; r < items.length; r += cols) {
     const rowItems = items.slice(r, r + cols);
@@ -457,31 +488,208 @@ async function opImgRequest(roots, res) {
     frame: { id: roots[0].id, name: roots[0].name },
     slots,
   };
-  res.changes.push("request for " + slots.length + " images → tell Claude: \"insert the images\"");
+  res.changes.push("photo request: " + slots.length + " slots → the bridge fills them (Freepik)");
+}
+
+// знімок фреймів для Claude-плану автолейауту (спільний для ⚏ і 📱)
+function alSnapshot(targets) {
+  return targets.map((f) => ({
+    id: f.id, name: f.name, w: Math.round(f.width), h: Math.round(f.height),
+    children: f.children.filter((c) => c.visible !== false).map((c) => ({
+      id: c.id, name: c.name, type: c.type,
+      x: Math.round(c.x), y: Math.round(c.y),
+      w: Math.round(c.width || 0), h: Math.round(c.height || 0),
+      text: c.type === "TEXT" ? (c.characters || "").slice(0, 60) : undefined,
+      bg: (typeof c.width === "number" && c.width * c.height >= f.width * f.height * 0.6) || undefined,
+      img: (Array.isArray(c.fills) && c.fills.some((p) => p && p.type === "IMAGE")) || undefined,
+      al: c.layoutMode && c.layoutMode !== "NONE" ? c.layoutMode : undefined,
+    })),
+  }));
 }
 
 // smart auto-layout: знімок фрейма → план від Claude → застосовує bridge
 async function opAutoLayout(roots, res) {
+  // GROUP'и не несуть AL — спершу конвертуємо у фрейми, щоб потрапили в план.
+  // findAll іде в документному порядку (зовнішні перші), рефи дітей переживають перенос.
+  roots = roots.map((r) => (r.type === "GROUP" && r.children.length > 1 && !inInstance(r) ? frameifyGroup(r) : r));
+  const gs = [];
+  for (const r of roots) if (r.findAll) gs.push(...r.findAll((n) => n.type === "GROUP" && n.children && n.children.length > 1));
+  let framed = 0;
+  for (const g of gs) { try { if (!inInstance(g)) { frameifyGroup(g); framed++; } } catch (e) {} }
+  if (framed) res.changes.push(framed + " groups → frames");
   const targets = [];
   for (const n of walkAll(roots)) {
-    if (n.type === "FRAME" && (!n.layoutMode || n.layoutMode === "NONE") && n.children && n.children.length > 1) {
+    if (n.type === "FRAME" && (!n.layoutMode || n.layoutMode === "NONE") && n.children && n.children.length > 1 && !inInstance(n)) {
       targets.push(n);
-      if (targets.length >= 3) break;
     }
   }
   if (!targets.length) throw new Error("no frames without auto-layout with 2+ children in the selection");
-  res.alplan = {
-    frames: targets.map((f) => ({
-      id: f.id, name: f.name, w: Math.round(f.width), h: Math.round(f.height),
-      children: f.children.map((c) => ({
-        id: c.id, name: c.name, type: c.type,
-        x: Math.round(c.x), y: Math.round(c.y),
-        w: Math.round(c.width || 0), h: Math.round(c.height || 0),
-        text: c.type === "TEXT" ? (c.characters || "").slice(0, 60) : undefined,
-      })),
-    })),
-  };
+  res.alplan = { frames: alSnapshot(targets) };
   res.changes.push("layout snapshot: " + targets.map((t) => t.name).join(", ") + " → Claude plans the auto-layout");
+}
+
+// GROUP → FRAME на тих самих межах: групи не мають автолейауту, для рефлоу/плану потрібен фрейм.
+// Діти групи в Figma живуть у координатах батька групи — переносимо з поправкою на межі.
+function frameifyGroup(g) {
+  const parent = g.parent;
+  const f = figma.createFrame();
+  parent.insertChild(parent.children.indexOf(g), f);
+  f.name = g.name;
+  f.x = g.x; f.y = g.y;
+  f.resize(Math.max(1, g.width), Math.max(1, g.height));
+  f.fills = []; f.clipsContent = false;
+  const gx = g.x, gy = g.y;
+  for (const c of g.children.slice()) {
+    const ax = c.x - gx, ay = c.y - gy;
+    f.appendChild(c);
+    c.x = ax; c.y = ay;
+  }
+  return f; // порожня група зникає сама
+}
+
+// NONE-фрейм зі стеком дітей (типово сторінка з секціями) → VERTICAL AL.
+// Оверлеї (nav поверх hero: середина ноди вище кінця попереднього контенту) → ABSOLUTE.
+function stackify(f) {
+  const kids = f.children.filter(c => c.visible !== false)
+    .map(c => c.type === "GROUP" && c.children.length ? frameifyGroup(c) : c);
+  if (kids.length < 2) return false;
+  const sorted = kids.slice().sort((a, b) => a.y - b.y || b.height - a.height);
+  const flow = [], absl = [];
+  let flowEnd = -Infinity;
+  for (const c of sorted) {
+    if (c.y + c.height / 2 < flowEnd) { absl.push(c); continue; }
+    flow.push(c); flowEnd = Math.max(flowEnd, c.y + c.height);
+  }
+  if (flow.length < 2) return false;
+  const gaps = [];
+  for (let i = 1; i < flow.length; i++) gaps.push(flow[i].y - (flow[i - 1].y + flow[i - 1].height));
+  const med = gaps.slice().sort((a, b) => a - b)[Math.floor(gaps.length / 2)] || 0;
+  const padT = Math.max(0, Math.round(Math.min(...flow.map(n => n.y))));
+  const padL = Math.max(0, Math.round(Math.min(...flow.map(n => n.x))));
+  const padR = Math.max(0, Math.round(f.width - Math.max(...flow.map(n => n.x + n.width))));
+  const padB = Math.max(0, Math.round(f.height - Math.max(...flow.map(n => n.y + n.height))));
+  const absPos = absl.map(n => ({ n, x: n.x, y: n.y }));
+  let i = 0;
+  for (const n of absl) f.insertChild(i++, n);
+  for (const n of flow) f.insertChild(i++, n);
+  f.layoutMode = "VERTICAL";
+  f.primaryAxisSizingMode = "FIXED"; f.counterAxisSizingMode = "FIXED";
+  f.itemSpacing = Math.max(0, Math.round(med));
+  f.paddingTop = padT; f.paddingRight = padR; f.paddingBottom = padB; f.paddingLeft = padL;
+  for (const a of absPos) { try { a.n.layoutPositioning = "ABSOLUTE"; a.n.x = a.x; a.n.y = a.y; } catch (e) {} }
+  return true;
+}
+
+// мобільна адаптація: клон виділеного фрейма поруч → 375px, реФлоу автолейаутів,
+// відступи/гапи/шрифти стиснуті евристикою. Джерело не чіпаємо.
+const MOBILE_W = 375;
+
+function mClamp(v, k, lo, hi) { return v ? Math.max(lo, Math.min(hi, Math.round(v * k))) : 0; }
+
+async function mReflow(n, availW, k, isRoot) {
+  if (n.type === "TEXT") {
+    try {
+      const fonts = n.getRangeAllFontNames(0, n.characters.length);
+      for (const f of fonts) await figma.loadFontAsync(f);
+      if (typeof n.fontSize === "number" && n.fontSize > 20)
+        n.fontSize = Math.max(20, Math.round(n.fontSize * 0.62));
+      if (n.width > availW) { n.textAutoResize = "HEIGHT"; n.resize(availW, n.height); }
+    } catch (e) {}
+    return;
+  }
+  if (!("children" in n)) {
+    // листок (картинка/прямокутник) ширший за доступне → стискаємо зі збереженням пропорцій
+    try { if (n.width > availW) { const r = availW / n.width; n.resize(availW, Math.max(1, Math.round(n.height * r))); } } catch (e) {}
+    return;
+  }
+  const al = n.layoutMode && n.layoutMode !== "NONE";
+  if (!al) {
+    // без AL — пропорційний rescale усього піддерева, структуру не вигадуємо
+    try { if (n.width > availW && n.rescale) n.rescale(availW / n.width); } catch (e) {}
+    return;
+  }
+  const wide = n.width > availW;
+  if (wide) {
+    try {
+      n.paddingLeft = mClamp(n.paddingLeft, k, 8, 24);
+      n.paddingRight = mClamp(n.paddingRight, k, 8, 24);
+      n.paddingTop = mClamp(n.paddingTop, k, 8, 64);
+      n.paddingBottom = mClamp(n.paddingBottom, k, 8, 64);
+      n.itemSpacing = mClamp(n.itemSpacing, k, 4, 40);
+    } catch (e) {}
+    if (n.layoutMode === "HORIZONTAL") {
+      // ряд не влазить → вертикальний стек
+      try {
+        n.layoutMode = "VERTICAL";
+        n.primaryAxisSizingMode = "AUTO";
+        n.counterAxisSizingMode = "FIXED";
+        n.counterAxisAlignItems = "MIN";
+      } catch (e) {}
+    }
+  }
+  if (isRoot) {
+    try {
+      n.counterAxisSizingMode = "FIXED";
+      if (n.layoutMode === "VERTICAL") n.primaryAxisSizingMode = "AUTO";
+      n.resize(availW, n.height);
+    } catch (e) {}
+  }
+  const inner = availW - (n.paddingLeft || 0) - (n.paddingRight || 0);
+  const vertical = n.layoutMode === "VERTICAL";
+  for (const c of n.children.slice()) {
+    if (c.layoutPositioning === "ABSOLUTE") {
+      try { c.x = Math.round(c.x * k); c.y = Math.round(c.y * k); } catch (e) {}
+      continue;
+    }
+    await mReflow(c, inner, k, false);
+    if (vertical) {
+      // у вертикальному стеку контейнери й широкий контент тягнуться на всю ширину
+      try {
+        if (c.type === "TEXT" || (("layoutMode" in c) && c.layoutMode && c.layoutMode !== "NONE") || c.width > inner)
+          c.layoutSizingHorizontal = "FILL";
+      } catch (e) {}
+    }
+  }
+}
+
+async function opMobile(roots, res) {
+  for (const src of roots) {
+    if (src.type !== "FRAME" && src.type !== "COMPONENT") { res.skipped.push(src.name + " (not a frame)"); continue; }
+    if (src.width <= MOBILE_W) { res.skipped.push(src.name + " (already ≤375)"); continue; }
+    const m = src.clone();
+    m.name = src.name + " / mobile-375";
+    m.x = src.x + src.width + 100;
+    m.y = src.y;
+    // всі GROUP'и клона → фрейми (групи не вміють AL)
+    const gs = m.findAll ? m.findAll((n) => n.type === "GROUP" && n.children && n.children.length > 1) : [];
+    for (const g of gs) { try { if (!inInstance(g)) frameifyGroup(g); } catch (e) {} }
+    if (!m.layoutMode || m.layoutMode === "NONE") {
+      // NONE-корінь: збираємо вертикальний стек (сторінка з секціями)
+      if (!stackify(m)) {
+        m.remove();
+        res.skipped.push(src.name + " (no auto-layout and not a clean vertical stack — run Layout first)");
+        continue;
+      }
+    }
+    // NONE-фрейми всередині → Claude планує структуру (як ⚏), потім бридж кличе h.mreflow.
+    // Без них — рефлоу одразу тут.
+    const targets = [];
+    for (const n of walkAll([m])) {
+      if (n.type === "FRAME" && (!n.layoutMode || n.layoutMode === "NONE") && n.children && n.children.length > 1 && !inInstance(n)) {
+        targets.push(n);
+      }
+    }
+    if (targets.length) { // кілька виділених фреймів → один план на всі клони
+      res.mobileplan = res.mobileplan || { cloneIds: [], frames: [] };
+      res.mobileplan.cloneIds.push(m.id);
+      res.mobileplan.frames.push(...alSnapshot(targets));
+      res.changes.push(src.name + ": " + targets.length + " frames → Claude plans auto-layout, then 375 reflow");
+    } else {
+      await mReflow(m, MOBILE_W, MOBILE_W / src.width, true);
+      res.changes.push(src.name + " → mobile 375×" + Math.round(m.height));
+    }
+    figma.currentPage.selection = [m];
+  }
 }
 
 // snap до колонок layout grid: x і ширина до колонок; y не чіпаємо
@@ -493,6 +701,8 @@ async function opGrid(roots, res) {
       if (!host || host.type === "PAGE") { host = null; break; }
     }
     if (!host || !root.children) { res.skipped.push(root.name + " (no COLUMNS layout grid)"); continue; }
+    if (root.layoutMode && root.layoutMode !== "NONE") { res.skipped.push(root.name + " (auto-layout places its children)"); continue; }
+    if (root.type === "INSTANCE" || inInstance(root)) { res.skipped.push(root.name + " (instance internals are locked)"); continue; }
     const grid = host.layoutGrids.find((g) => g.pattern === "COLUMNS" && g.visible !== false);
     const count = grid.count, gutter = grid.gutterSize || 0;
     let colW, colX0;
@@ -526,7 +736,6 @@ async function opGrid(roots, res) {
       }
       return Math.round(best);
     };
-    if (root.type === "INSTANCE") { res.skipped.push(root.name + " (instance internals are locked)"); continue; }
     for (const n of root.children) {
       if (typeof n.x !== "number") continue;
       const hx = n.x + shift;
@@ -544,16 +753,21 @@ async function opGrid(roots, res) {
   if (!res.changes.length && !res.skipped.length) res.skipped.push("nothing to align");
 }
 
-// збір текстів на вичитку — виконує headless Claude через bridge
+// збір текстів на вичитку — виконує headless Claude через bridge.
+// Тексти йдуть цілими: обрізаний текст після «виправлення» затер би свій хвіст
 async function opSpell(roots, res) {
   const texts = [];
+  let long = 0;
   for (const n of walkAll(roots)) {
     if (n.type !== "TEXT") continue;
     const s = n.characters;
-    if (s && s.trim().length >= 2) texts.push({ id: n.id, text: s.slice(0, 500) });
+    if (!s || s.trim().length < 2) continue;
+    if (s.length > 1500) { long++; continue; }
+    texts.push({ id: n.id, text: s });
     if (texts.length >= 120) break;
   }
-  if (!texts.length) throw new Error("no texts in the selection");
+  if (long) res.skipped.push(long + " texts over 1500 chars");
+  if (!texts.length) throw new Error("no texts to check in the selection");
   res.spell = { texts };
   res.changes.push("sent to spellcheck: " + texts.length + " texts → Claude runs in background");
 }
@@ -573,7 +787,7 @@ async function opRedesign(roots, res) {
       "do NOT copy the source's paddings/gaps). Styling is STRICTLY the file's design system: ONLY its color variables (scopes), " +
       "ONLY its text styles, ONLY existing assets — never invent hex values or ad-hoc fonts; pick the closest token when unsure.",
   };
-  res.changes.push("redesign request \"" + root.name + "\" → tell Claude: \"redesign the section\"");
+  res.changes.push("redesign request \"" + root.name + "\" → Claude runs it in background");
 }
 
 // запит на прототип із вайрфрейму/скетчу/текстів — виконує Claude-сесія
@@ -587,19 +801,17 @@ async function opPrototype(roots, res) {
       "all texts and logic of the source; if the source is a bitmap, take a shot and read it visually; " +
       "build next to the source",
   };
-  res.changes.push("prototype request \"" + root.name + "\" → tell Claude: \"build the prototype\"");
+  res.changes.push("prototype request \"" + root.name + "\" → Claude runs it in background");
 }
 
-
-
-// док-фрейм зі звітом поруч із першою нодою виділення
+// док-фрейм зі звітом поруч із першою нодою виділення (на рівні сторінки)
 async function placeReport(roots, res, kindLabel) {
   const root0 = roots[0];
-  const parent = root0.parent && root0.parent.type !== "PAGE" ? figma.currentPage : (root0.parent || figma.currentPage);
+  const parent = figma.currentPage;
   await figma.loadFontAsync({ family: "Inter", style: "Regular" });
   await figma.loadFontAsync({ family: "Inter", style: "Medium" });
   const repName = kindLabel + " · " + root0.name;
-  const old = parent.findOne ? parent.findOne((c) => c.name === repName) : null;
+  const old = parent.children.find((c) => c.name === repName);
   if (old) old.remove(); // замінюємо власний попередній звіт
   const rep = figma.createFrame();
   parent.appendChild(rep);
@@ -610,8 +822,8 @@ async function placeReport(roots, res, kindLabel) {
   rep.itemSpacing = 6; rep.cornerRadius = 8;
   rep.fills = [{ type: "SOLID", color: { r: 0.075, g: 0.075, b: 0.085 } }];
   const abs = root0.absoluteTransform;
-  rep.x = abs[0][2] + root0.width + 40 - (parent.absoluteTransform ? parent.absoluteTransform[0][2] : 0);
-  rep.y = abs[1][2] - (parent.absoluteTransform ? parent.absoluteTransform[1][2] : 0);
+  rep.x = abs[0][2] + root0.width + 40;
+  rep.y = abs[1][2];
   const title = figma.createText();
   title.fontName = { family: "Inter", style: "Medium" }; title.fontSize = 13;
   title.characters = res.changes[0] || repName;
@@ -643,8 +855,8 @@ async function opLint(roots, res) {
 
   for (const n of walkAll(roots)) {
     if (DEFAULT_NAME_RE.test(n.name)) { counts.names++; res.changes.push("name: " + n.name); }
-    if (typeof n.x === "number" &&
-        (n.x % 1 || n.y % 1 || (typeof n.width === "number" && (n.width % 1 || n.height % 1)))) {
+    if (!inInstance(n) && ((freePos(n) && (n.x % 1 || n.y % 1)) ||
+        (fixedSize(n) && (n.width % 1 || n.height % 1)))) {
       counts.px++; res.changes.push("fractional px: " + n.name);
     }
     for (const prop of ["fills", "strokes"]) {
@@ -680,6 +892,7 @@ async function opLint(roots, res) {
   for (const root of roots) {
     const grid = (root.layoutGrids || []).find((g) => g.pattern === "COLUMNS" && g.visible !== false);
     if (!grid || !root.children || grid.alignment !== "STRETCH") continue;
+    if (root.layoutMode && root.layoutMode !== "NONE") continue; // позиції дає auto-layout
     const count = grid.count, gutter = grid.gutterSize || 0, offset = grid.offset || 0;
     const colW = (root.width - offset * 2 - gutter * (count - 1)) / count;
     for (const n of root.children) {
@@ -767,17 +980,17 @@ async function opRecreate(roots, res) {
       "Spacing values snap to the file's size variables where close. " +
       "Image areas as IMAGE-fill placeholders. Verify with a side-by-side shot comparison and fix layout deltas before finishing.",
   };
-  res.changes.push("recreate request \"" + root.name + "\" → tell Claude: \"recreate the design\"");
+  res.changes.push("recreate request \"" + root.name + "\" → Claude runs it in background");
 }
 
-const OPS = { clean: opClean, rename: opRename, varsal: opVarsAL, varscolor: opVarsColor,
+const OPS = { clean: opClean, varsal: opVarsAL, varscolor: opVarsColor,
   textstyle: opTextStyles, sectionize: opSectionize, imgreuse: opImgReuse, imggen: opImgRequest,
   autolayout: opAutoLayout, grid: opGrid, spell: opSpell, redesign: opRedesign, prototype: opPrototype,
-  lint: opLint, contrast: opContrast, recreate: opRecreate };
-const OP_NAMES = { clean: "Clean", rename: "Rename", varsal: "AL→vars", varscolor: "Colors→vars",
-  textstyle: "Text styles", sectionize: "Sectionize", imgreuse: "Img reuse", imggen: "Magnific request",
+  lint: opLint, contrast: opContrast, recreate: opRecreate, mobile: opMobile };
+const OP_NAMES = { clean: "Clean", varsal: "AL→vars", varscolor: "Colors→vars",
+  textstyle: "Text styles", sectionize: "Sectionize", imgreuse: "Img reuse", imggen: "Photo fill",
   autolayout: "Auto-layout", grid: "Grid snap", spell: "Spellcheck", redesign: "Redesign",
-  prototype: "Prototype", lint: "Lint", contrast: "Contrast", recreate: "Recreate" };
+  prototype: "Prototype", lint: "Lint", contrast: "Contrast", recreate: "Recreate", mobile: "Mobile 375" };
 
 function safeStringify(value) {
   if (value === undefined) return null;
@@ -866,6 +1079,17 @@ const HELPERS = {
     return lines.join("\n");
   },
 
+  // 375-рефлоу вже автолейаутного клона (фінальний крок 📱 Mobile, кличе bridge)
+  async mreflow(id) {
+    const m = await figma.getNodeByIdAsync(id);
+    if (!m) throw new Error("mreflow: node " + id + " not found");
+    const w = m.width;
+    await mReflow(m, MOBILE_W, MOBILE_W / w, true);
+    figma.currentPage.selection = [m];
+    figma.viewport.scrollAndZoomIntoView([m]);
+    return { w: m.width, h: Math.round(m.height) };
+  },
+
   // Load every unique font in subtree, then run async fn
   async withFonts(rootNode, asyncFn) {
     const texts = rootNode.findAll
@@ -874,10 +1098,11 @@ const HELPERS = {
     const seen = new Set();
     const fonts = [];
     for (const t of texts) {
-      if (typeof t.fontName === "symbol") continue;
-      const fn = t.fontName;
-      const key = fn.family + "|" + fn.style;
-      if (!seen.has(key)) { seen.add(key); fonts.push(fn); }
+      const fns = typeof t.fontName === "symbol" ? t.getRangeAllFontNames(0, t.characters.length) : [t.fontName];
+      for (const fn of fns) {
+        const key = fn.family + "|" + fn.style;
+        if (!seen.has(key)) { seen.add(key); fonts.push(fn); }
+      }
     }
     await Promise.all(fonts.map((f) => figma.loadFontAsync(f)));
     return await asyncFn();
@@ -886,10 +1111,119 @@ const HELPERS = {
   // Set a text node's characters with auto font load (single-font texts only)
   async setText(node, text) {
     if (typeof node.fontName === "symbol") {
-      throw new Error("h.setText: text '" + node.name + "' has mixed fonts; load each range manually");
+      throw new Error("h.setText: text '" + node.name + "' has mixed fonts — use h.replaceText");
     }
     await figma.loadFontAsync(node.fontName);
     node.characters = text;
+  },
+
+  // Change a text by rewriting only the span that differs, so per-range styles (bold word,
+  // colored link, mixed fonts) survive — the way a typo fix should land
+  async replaceText(node, text) {
+    const old = node.characters;
+    if (old === text) return node;
+    const fonts = old.length ? node.getRangeAllFontNames(0, old.length) : [node.fontName];
+    await Promise.all(fonts.map((f) => figma.loadFontAsync(f)));
+    let a = 0, b = 0;
+    while (a < old.length && a < text.length && old[a] === text[a]) a++;
+    while (b < old.length - a && b < text.length - a && old[old.length - 1 - b] === text[text.length - 1 - b]) b++;
+    const hi = (s, i) => i >= 0 && i < s.length && s.charCodeAt(i) >= 0xd800 && s.charCodeAt(i) <= 0xdbff;
+    if (hi(old, a - 1)) a--;                            // never split an emoji's surrogate pair
+    if (b && hi(old, old.length - 1 - b)) b--;
+    if (!a && !b) { node.characters = text; return node; }
+    if (old.length - b > a) node.deleteCharacters(a, old.length - b);
+    const ins = text.slice(a, text.length - b);
+    if (ins) node.insertCharacters(a, ins, a ? "BEFORE" : "AFTER"); // style of the neighbour
+    return node;
+  },
+
+  // Apply a Smart auto-layout plan from the bridge: wrap planned groups into auto-layout
+  // frames, gaps/paddings measured from the real geometry (frame size never changes,
+  // overlaps stay free, absolutes keep their spot); targets the plan missed get an axis heuristic
+  async alApply(plan, targets) {
+    const made = [];
+    const median = (a) => { if (!a.length) return 0; const s = a.slice().sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+    const gapsAlong = (nodes, dir) => {
+      const s = nodes.slice().sort((a, b) => (dir === "VERTICAL" ? a.y - b.y : a.x - b.x));
+      const g = [];
+      for (let i = 1; i < s.length; i++) g.push(dir === "VERTICAL"
+        ? s[i].y - (s[i - 1].y + s[i - 1].height) : s[i].x - (s[i - 1].x + s[i - 1].width));
+      return { sorted: s, gaps: g };
+    };
+    const pads = (f, nodes) => ({
+      top: Math.max(0, Math.round(Math.min(...nodes.map((n) => n.y)))),
+      left: Math.max(0, Math.round(Math.min(...nodes.map((n) => n.x)))),
+      right: Math.max(0, Math.round(f.width - Math.max(...nodes.map((n) => n.x + n.width)))),
+      bottom: Math.max(0, Math.round(f.height - Math.max(...nodes.map((n) => n.y + n.height)))),
+    });
+    const stack = (f, dir, nodes, gaps) => {
+      const p = pads(f, nodes);
+      f.layoutMode = dir;
+      f.primaryAxisSizingMode = "FIXED"; f.counterAxisSizingMode = "FIXED";
+      f.itemSpacing = Math.max(0, Math.round(median(gaps)));
+      f.paddingTop = p.top; f.paddingRight = p.right; f.paddingBottom = p.bottom; f.paddingLeft = p.left;
+    };
+    for (const fp of (plan && plan.frames) || []) {
+      const f = await figma.getNodeByIdAsync(fp.frameId);
+      if (!f || f.type !== "FRAME") continue;
+      const dir = fp.direction === "HORIZONTAL" ? "HORIZONTAL" : "VERTICAL";
+      const flow = [];   // обгортки груп + окремий контент, у порядку плану
+      const absl = [];   // absolute-фони
+      for (const ch of fp.children || []) {
+        if (ch.type === "group") {
+          const nodes = [];
+          for (const id of ch.ids || []) { const n = await figma.getNodeByIdAsync(id); if (n && n.parent === f) nodes.push(n); }
+          if (!nodes.length) continue;
+          if (nodes.length === 1) { flow.push(nodes[0]); continue; }
+          const gdir = ch.direction === "VERTICAL" ? "VERTICAL" : "HORIZONTAL";
+          const { sorted, gaps } = gapsAlong(nodes, gdir);
+          const minX = Math.min(...nodes.map((n) => n.x)), minY = Math.min(...nodes.map((n) => n.y));
+          const maxX = Math.max(...nodes.map((n) => n.x + n.width)), maxY = Math.max(...nodes.map((n) => n.y + n.height));
+          const w = figma.createFrame();
+          f.appendChild(w);
+          w.name = ch.name || "group"; w.x = minX; w.y = minY;
+          w.resize(Math.max(1, maxX - minX), Math.max(1, maxY - minY));
+          w.fills = []; w.clipsContent = false;
+          for (const n of sorted) { const ax = n.x - minX, ay = n.y - minY; w.appendChild(n); n.x = ax; n.y = ay; }
+          if (!gaps.length || median(gaps) >= -2) { // overlap (бейдж на аватарі) → plain wrapper без AL
+            w.layoutMode = gdir;
+            w.primaryAxisSizingMode = "AUTO"; w.counterAxisSizingMode = "AUTO";
+            w.itemSpacing = Math.max(0, Math.round(median(gaps)));
+          }
+          flow.push(w); made.push(w.name + "x" + nodes.length);
+        } else if (ch.id) {
+          const n = await figma.getNodeByIdAsync(ch.id);
+          if (n && n.parent === f) (ch.absolute ? absl : flow).push(n);
+        }
+      }
+      if (!flow.length) continue;
+      let idx = 0; // z-порядок: фони під низ, контент за візуальним порядком
+      for (const n of absl) f.insertChild(idx++, n);
+      const { sorted, gaps } = gapsAlong(flow, dir);
+      for (const n of sorted) f.insertChild(idx++, n);
+      if (gaps.length && median(gaps) < -2) { made.push(f.name + ": overlapping top-level items — frame AL skipped"); continue; }
+      const absPos = absl.map((n) => ({ n, x: n.x, y: n.y }));
+      stack(f, dir, flow, gaps);
+      // absolute лише ПІСЛЯ layoutMode, і на свої координати (інакше фон стрибає)
+      for (const a of absPos) { try { a.n.layoutPositioning = "ABSOLUTE"; a.n.x = a.x; a.n.y = a.y; } catch (e) {} }
+    }
+    for (const id of targets || []) { // план загубив ціль або не розпарсився → осьова евристика
+      const f = await figma.getNodeByIdAsync(id);
+      if (!f || f.type !== "FRAME" || (f.layoutMode && f.layoutMode !== "NONE")) continue;
+      const kids = f.children.filter((c) => c.visible !== false);
+      if (kids.length < 2) continue;
+      for (const dir of ["HORIZONTAL", "VERTICAL"]) {
+        const { sorted, gaps } = gapsAlong(kids, dir);
+        if (!gaps.length || gaps.some((g) => g < -2)) continue; // перекриття по цій осі
+        let i = 0;
+        for (const n of sorted) f.insertChild(i++, n);
+        stack(f, dir, kids, gaps);
+        made.push(f.name + ": fallback " + dir);
+        break;
+      }
+    }
+    figma.notify("Smart auto-layout: " + made.length + " groups");
+    return made;
   },
 
   // Clone node and place it next to the original
@@ -949,11 +1283,14 @@ const HELPERS = {
       if (p.type === "IMAGE") return "IMAGE:" + (p.imageHash || "?") + " " + (p.scaleMode || "");
       return p.type; // GRADIENT_LINEAR, …
     };
-    const walk = async (n, d) => {
+    const walk = async (n, d, inAL) => {
       const o = { id: n.id, name: n.name, type: n.type };
       if (n.width !== undefined) {
         o.w = Math.round(n.width); o.h = Math.round(n.height);
-        o.x = Math.round(n.x); o.y = Math.round(n.y);
+        // усередині auto-layout позиція похідна — x/y лише для вільних/absolute нод
+        if (!inAL || n.layoutPositioning === "ABSOLUTE") {
+          o.x = Math.round(n.x); o.y = Math.round(n.y);
+        }
       }
       if (n.layoutMode && n.layoutMode !== "NONE") {
         o.layout = n.layoutMode + " gap:" + n.itemSpacing +
@@ -998,12 +1335,13 @@ const HELPERS = {
           (g.alignment ? " " + g.alignment : ""));
       }
       if (n.children && d < maxDepth) {
+        const childInAL = !!(n.layoutMode && n.layoutMode !== "NONE");
         o.children = [];
-        for (const c of n.children) if (c.visible !== false) o.children.push(await walk(c, d + 1));
+        for (const c of n.children) if (c.visible !== false) o.children.push(await walk(c, d + 1, childInAL));
       }
       return o;
     };
-    return await walk(node, 0);
+    return await walk(node, 0, false);
   },
 
   // Dump all local variables grouped by collection; aliases as →name, colors as hex
@@ -1035,6 +1373,35 @@ const HELPERS = {
     return out;
   },
 
+  // All local text styles — compact, for protocols that must reuse the file's typography
+  async stylesDump() {
+    const out = [];
+    for (const s of await figma.getLocalTextStylesAsync()) {
+      const o = { name: s.name, id: s.id,
+        font: s.fontName.family + " " + s.fontName.style, size: s.fontSize };
+      if (s.lineHeight.unit !== "AUTO")
+        o.lineH = s.lineHeight.value + (s.lineHeight.unit === "PERCENT" ? "%" : "px");
+      if (s.letterSpacing && s.letterSpacing.value)
+        o.letterS = s.letterSpacing.value + (s.letterSpacing.unit === "PERCENT" ? "%" : "px");
+      out.push(o);
+    }
+    return out;
+  },
+
+  // Run a panel op from a script (lint, contrast, clean, varscolor, grid, …) on node ids/nodes,
+  // default the selection. Returns {changes, skipped, …}; Claude/Freepik follow-ups are not started
+  async op(kind, nodes, params) {
+    const fn = OPS[kind];
+    if (!fn) throw new Error("h.op: unknown op '" + kind + "' — one of " + Object.keys(OPS).join(", "));
+    const roots = nodes && nodes.length
+      ? await Promise.all(nodes.map((n) => (typeof n === "string" ? figma.getNodeByIdAsync(n) : n)))
+      : figma.currentPage.selection.slice();
+    if (!roots.length || roots.some((n) => !n)) throw new Error("h.op: no nodes — pass ids or select something");
+    const res = { changes: [], skipped: [] };
+    await fn(roots, res, params || {});
+    return res;
+  },
+
   // Quick async accessors
   async node(id)      { return await figma.getNodeByIdAsync(id); },
   async var_(idOrKey) { return await resolveVar(idOrKey); },
@@ -1063,11 +1430,11 @@ figma.ui.onmessage = async (msg) => {
   }
   if (msg.type === "op") {
     const sel = figma.currentPage.selection;
-    if (!sel.length) { figma.notify("Nothing selected"); return; }
     const fn = OPS[msg.kind];
-    if (!fn) return;
     const res = { changes: [], skipped: [] };
     try {
+      if (!fn) throw new Error("unknown op " + msg.kind);
+      if (!sel.length) throw new Error("nothing selected");
       await fn(sel, res, msg.params || {});
       const summary = res.readonly
         ? (res.changes[0] || OP_NAMES[msg.kind])
@@ -1088,12 +1455,19 @@ figma.ui.onmessage = async (msg) => {
       if (res.prototype) figma.ui.postMessage({ type: "protorequest", request: res.prototype });
       if (res.design) figma.ui.postMessage({ type: "designrequest", request: res.design });
       if (res.alplan) figma.ui.postMessage({ type: "alplanrequest", request: res.alplan });
+      if (res.mobileplan) figma.ui.postMessage({ type: "mobileplanrequest", request: res.mobileplan });
       if (!res.readonly || res.reportPlaced) figma.commitUndo(); // мутації і звіт-фрейми = undo-крок
     } catch (e) {
-      figma.notify("Error " + OP_NAMES[msg.kind] + ": " + ((e && e.message) || e));
+      figma.commitUndo(); // що встигло змінитись до помилки — окремий крок ⌘Z
+      figma.notify("Error " + (OP_NAMES[msg.kind] || msg.kind) + ": " + ((e && e.message) || e));
       figma.ui.postMessage({ type: "opreport", kind: msg.kind, error: true,
-        summary: "error: " + ((e && e.message) || e), changes: [], skipped: [] });
+        summary: "error: " + ((e && e.message) || e), changes: res.changes.slice(0, 80), skipped: [] });
     }
+    return;
+  }
+  if (msg.type === "rmnode") { // «✕ remove result» під відповіддю протоколу
+    const n = await figma.getNodeByIdAsync(msg.id);
+    if (n) { const nm = n.name; n.remove(); figma.commitUndo(); figma.notify("Removed: " + nm); }
     return;
   }
   if (msg.type === "notify") {
@@ -1123,7 +1497,7 @@ figma.ui.onmessage = async (msg) => {
   }
   if (msg.type === "resize") {
     if (!isMini && typeof msg.h === "number") {
-      figma.ui.resize(UI_SIZE.open.w, Math.max(90, Math.min(500, Math.round(msg.h))));
+      figma.ui.resize(UI_SIZE.open.w, Math.max(90, Math.min(UI_SIZE.open.maxH, Math.round(msg.h))));
     }
     return;
   }
@@ -1154,6 +1528,7 @@ figma.ui.onmessage = async (msg) => {
     });
     figma.commitUndo(); // кожен exec = окремий крок undo
   } catch (e) {
+    figma.commitUndo(); // і те, що встигло змінитись до помилки
     figma.ui.postMessage({
       type: "error",
       id,
