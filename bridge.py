@@ -548,9 +548,10 @@ async def run_protocol(kind: str, req: dict):
 BAD_TITLE = ("3d", "render", "generative", "ai image", "miniature", "toy", "lineart",
              "drawing", "illustration", "cartoon", "vector")
 RANK_PROMPT = (
-    "Rank stock photo candidates for a premium brand design. Judge relevance by each group's "
-    "context texts. For each group pick the best distinct photos (real photography feel, "
-    "editorial quality, no stock cliches, no visible text/watermarks), enough to cover need. "
+    "Pick stock photos for a premium brand design from their TITLES only (you can't see the "
+    "images — judge the titles). For each group, order candidate ids best first: titles that "
+    "match the group's context and read like real editorial photography; avoid titles that "
+    "suggest stock cliches, illustrations or text/watermarks. Give at least `need` ids per group. "
     'Return ONLY JSON: {"groups":[{"i":<group index>,"ids":[<candidate ids in order>]}]}. Data: '
 )
 
@@ -592,8 +593,9 @@ async def run_images(req: dict):
     if not slots:
         return "no image slots in the request"
     groups = {}
-    for s in slots:
-        sig = " | ".join(s.get("context") or [])[:120] or s.get("name") or "photo"
+    for s in slots:  # theme = nearby texts; without them, the frame and layer names
+        sig = (" | ".join(s.get("context") or [])[:120]
+               or f"{s.get('parent') or ''} {s.get('name') or ''}".strip() or "photo")
         groups.setdefault(sig, []).append(s)
     await status("imggen", f"searching photos: {len(groups)} themes / {len(slots)} slots…")
     async with ClientSession(headers={"x-freepik-api-key": key}, timeout=ClientTimeout(total=60)) as http:
@@ -644,7 +646,9 @@ async def run_images(req: dict):
                     done += 1
                 except Exception as e:
                     print(f"[imggen] slot {slot.get('id')}: {e!r}", flush=True)
-    reply = {"text": f"inserted {done}/{len(slots)} photos ({len(groups)} themes, Freepik)"}
+    empty = [sig.split("|")[0].strip()[:40] for (sig, _), c in zip(groups.items(), cands) if not c]
+    reply = {"text": f"inserted {done}/{len(slots)} photos ({len(groups)} themes, Freepik)"
+                     + (f" — no results for: {', '.join(empty)}" if empty else "")}
     fid = (req.get("frame") or {}).get("id")
     if fid and done:
         img = await preview(fid)

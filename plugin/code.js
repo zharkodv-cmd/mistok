@@ -423,7 +423,7 @@ async function opImgReuse(roots, res) {
   const contextTokens = (n) => {
     const texts = [];
     let scope = n.parent;
-    for (let up = 0; scope && up < 2; up++) {
+    for (let up = 0; scope && scope.type !== "PAGE" && up < 2; up++) { // тексти сторінки — чужий контекст
       if (scope.findAll) {
         for (const t of scope.findAll((c) => c.type === "TEXT")) {
           const s = t.characters.trim();
@@ -468,7 +468,7 @@ async function opImgRequest(roots, res) {
     const parent = n.parent;
     const texts = [];
     let scope = parent;
-    for (let up = 0; scope && up < 2; up++) {
+    for (let up = 0; scope && scope.type !== "PAGE" && up < 2; up++) { // тексти сторінки — чужий контекст
       if (scope.findAll) {
         for (const t of scope.findAll((c) => c.type === "TEXT")) {
           const s = t.characters.trim();
@@ -572,8 +572,10 @@ function stackify(f) {
   let i = 0;
   for (const n of absl) f.insertChild(i++, n);
   for (const n of flow) f.insertChild(i++, n);
-  f.layoutMode = "VERTICAL";
+  const w = f.width, ht = f.height;
+  f.layoutMode = "VERTICAL"; // вмикання AL спершу обтягує вміст — повертаємо розмір
   f.primaryAxisSizingMode = "FIXED"; f.counterAxisSizingMode = "FIXED";
+  f.resize(w, ht);
   f.itemSpacing = Math.max(0, Math.round(med));
   f.paddingTop = padT; f.paddingRight = padR; f.paddingBottom = padB; f.paddingLeft = padL;
   for (const a of absPos) { try { a.n.layoutPositioning = "ABSOLUTE"; a.n.x = a.x; a.n.y = a.y; } catch (e) {} }
@@ -611,6 +613,7 @@ async function mReflow(n, availW, k, isRoot) {
   const wide = n.width > availW;
   if (wide) {
     try {
+      if (n.layoutMode === "VERTICAL") n.primaryAxisSizingMode = "AUTO"; // висота — під новий вміст
       n.paddingLeft = mClamp(n.paddingLeft, k, 8, 24);
       n.paddingRight = mClamp(n.paddingRight, k, 8, 24);
       n.paddingTop = mClamp(n.paddingTop, k, 8, 64);
@@ -1158,8 +1161,10 @@ const HELPERS = {
     });
     const stack = (f, dir, nodes, gaps) => {
       const p = pads(f, nodes);
-      f.layoutMode = dir;
+      const w = f.width, ht = f.height;
+      f.layoutMode = dir; // вмикання AL спершу обтягує вміст — повертаємо розмір фрейма
       f.primaryAxisSizingMode = "FIXED"; f.counterAxisSizingMode = "FIXED";
+      f.resize(w, ht);
       f.itemSpacing = Math.max(0, Math.round(median(gaps)));
       f.paddingTop = p.top; f.paddingRight = p.right; f.paddingBottom = p.bottom; f.paddingLeft = p.left;
     };
