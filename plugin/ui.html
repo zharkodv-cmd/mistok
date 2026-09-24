@@ -259,6 +259,7 @@ const post = (msg) => parent.postMessage({ pluginMessage: msg }, "*");
 const notify = (text) => post({ type: "notify", text });
 let ws = null;
 let execCount = 0;
+let blocked = null; // bridge refused us: Mistok already runs in another Figma file
 
 const wsOpen = () => ws && ws.readyState === WebSocket.OPEN;
 function wsSend(msg) {
@@ -426,10 +427,12 @@ function renderStats(s) {
 
 // ── WebSocket до bridge ──────────────────────────────────────────────────
 function connect() {
-  setStatus("connecting…", "pending");
+  if (!blocked) setStatus("connecting…", "pending");
   try { ws = new WebSocket(SERVER); } catch (e) { setTimeout(connect, 2000); return; }
 
   ws.onopen = () => {
+    blocked = null;
+    statusEl.title = SERVER;
     setStatus("", "ok");
     wsSend({ type: "hello", version: VERSION });
   };
@@ -449,6 +452,8 @@ function connect() {
       const key = taskKey(msg.task);
       endTask(key);
       resolve(key, msg.text, msg.img || null, msg.node || null);
+    } else if (msg.type === "error") { // e.g. another plugin instance already connected
+      blocked = msg.text;
     } else if (msg.type === "killed") { // що bridge уже не виконує — прибираємо з панелі
       for (const key of [...tasks.keys()]) {
         if (!key.startsWith("op:") && !(msg.running || []).includes(kindOf(key))) drop(key, "✕ stopped");
@@ -458,8 +463,11 @@ function connect() {
   ws.onerror = () => setStatus("error", "err");
   ws.onclose = () => { // разом з bridge зникли і його фонові задачі
     for (const key of [...tasks.keys()]) if (!key.startsWith("op:")) drop(key, "(bridge disconnected)");
-    setStatus("retrying…", "err");
-    setTimeout(connect, 2000);
+    if (blocked) { // стукаємо рідше: підключимось, щойно Mistok закриють у тому файлі
+      setStatus("open in another file", "err");
+      statusEl.title = blocked + " — close Mistok in that file to use it here";
+    } else setStatus("retrying…", "err");
+    setTimeout(connect, blocked ? 5000 : 2000);
   };
 }
 
