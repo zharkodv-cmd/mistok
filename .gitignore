@@ -2,11 +2,16 @@ venv/
 __pycache__/
 *.pyc
 .env
+.chat-session
+
+# Local only: per-file design notes and retired one-off scripts/snapshots
+projects/
+archive/
 
 # Runtime artifacts
 *.log
 
-# Editor / IDE
+# Editor / OS
 .vscode/
 .idea/
 .DS_Store
