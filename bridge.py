@@ -620,11 +620,11 @@ async def run_images(req: dict):
                 model="haiku", timeout=120, kind="imggen")
             if isinstance(plan, dict):
                 ranked = {g.get("i"): g.get("ids") for g in plan.get("groups") or [] if isinstance(g, dict)}
-        done, used = 0, set()
+        done, used, err, refused = 0, set(), None, False
         for i, ((sig, ss), c) in enumerate(zip(groups.items(), cands)):
             queue = [x for x in (ranked.get(i) or [x["id"] for x in c]) if x not in used]
             for slot in ss:
-                if not queue:
+                if not queue or refused:
                     break
                 rid = queue.pop(0)
                 used.add(rid)
@@ -634,6 +634,8 @@ async def run_images(req: dict):
                         dl = await r.json(content_type=None)
                     url = (dl.get("data") or {}).get("url") or dl.get("url")
                     if not url:
+                        err = f"Freepik download HTTP {r.status}: {dl.get('message') or str(dl)[:160]}"
+                        refused = r.status in (401, 402, 403, 422)  # key/plan problem: all slots would fail
                         continue
                     async with http.get(url) as r:
                         body = await r.read()
@@ -645,10 +647,12 @@ async def run_images(req: dict):
                         "n.fills = [{type: 'IMAGE', imageHash: img.hash, scaleMode: 'FILL'}];", 60)
                     done += 1
                 except Exception as e:
+                    err = f"{type(e).__name__}: {e}"
                     print(f"[imggen] slot {slot.get('id')}: {e!r}", flush=True)
     empty = [sig.split("|")[0].strip()[:40] for (sig, _), c in zip(groups.items(), cands) if not c]
     reply = {"text": f"inserted {done}/{len(slots)} photos ({len(groups)} themes, Freepik)"
-                     + (f" — no results for: {', '.join(empty)}" if empty else "")}
+                     + (f" — no results for: {', '.join(empty)}" if empty else "")
+                     + (f" — {err}" if err and done < len(slots) else "")}
     fid = (req.get("frame") or {}).get("id")
     if fid and done:
         img = await preview(fid)
