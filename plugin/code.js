@@ -462,8 +462,8 @@ async function opImgReuse(roots, res) {
   if (!res.changes.length) res.skipped.push("no image slots found");
 }
 
-// ✨ запит на преміум-генерацію через Magnific — виконує Claude-сесія
-async function opImgRequest(roots, res) {
+// ✨ слоти → bridge шукає й вставляє справжні фото з публічного надбання (Openverse)
+async function opPhotos(roots, res) {
   const slots = findImageSlots(roots).map((n) => {
     const parent = n.parent;
     const texts = [];
@@ -483,12 +483,8 @@ async function opImgRequest(roots, res) {
              parent: parent ? parent.name : null, context: texts };
   });
   if (!slots.length) throw new Error("no image slots found (empty ph/img/photo/… placeholders or leaf nodes with an IMAGE fill)");
-  res.request = {
-    file: figma.root.name,
-    frame: { id: roots[0].id, name: roots[0].name },
-    slots,
-  };
-  res.changes.push("photo request: " + slots.length + " slots → the bridge fills them (Freepik)");
+  res.photos = { frame: { id: roots[0].id, name: roots[0].name }, slots };
+  res.changes.push("photo slots: " + slots.length + " → the bridge fetches public-domain photos");
 }
 
 // знімок фреймів для Claude-плану автолейауту (спільний для ⚏ і 📱)
@@ -987,11 +983,11 @@ async function opRecreate(roots, res) {
 }
 
 const OPS = { clean: opClean, varsal: opVarsAL, varscolor: opVarsColor,
-  textstyle: opTextStyles, sectionize: opSectionize, imgreuse: opImgReuse, imggen: opImgRequest,
+  textstyle: opTextStyles, sectionize: opSectionize, imgreuse: opImgReuse, photos: opPhotos,
   autolayout: opAutoLayout, grid: opGrid, spell: opSpell, redesign: opRedesign, prototype: opPrototype,
   lint: opLint, contrast: opContrast, recreate: opRecreate, mobile: opMobile };
 const OP_NAMES = { clean: "Clean", varsal: "AL→vars", varscolor: "Colors→vars",
-  textstyle: "Text styles", sectionize: "Sectionize", imgreuse: "Img reuse", imggen: "Photo fill",
+  textstyle: "Text styles", sectionize: "Sectionize", imgreuse: "Reuse", photos: "Photos",
   autolayout: "Auto-layout", grid: "Grid snap", spell: "Spellcheck", redesign: "Redesign",
   prototype: "Prototype", lint: "Lint", contrast: "Contrast", recreate: "Recreate", mobile: "Mobile 375" };
 
@@ -1394,7 +1390,7 @@ const HELPERS = {
   },
 
   // Run a panel op from a script (lint, contrast, clean, varscolor, grid, …) on node ids/nodes,
-  // default the selection. Returns {changes, skipped, …}; Claude/Freepik follow-ups are not started
+  // default the selection. Returns {changes, skipped, …}; the bridge's follow-up jobs are not started
   async op(kind, nodes, params) {
     const fn = OPS[kind];
     if (!fn) throw new Error("h.op: unknown op '" + kind + "' — one of " + Object.keys(OPS).join(", "));
@@ -1454,7 +1450,7 @@ figma.ui.onmessage = async (msg) => {
       for (const k of ["design", "redesign", "prototype"]) {
         if (res[k] && msg.params) { res[k].model = msg.params.model || null; res[k].effort = msg.params.effort || null; }
       }
-      if (res.request) figma.ui.postMessage({ type: "imgrequest", request: res.request });
+      if (res.photos) figma.ui.postMessage({ type: "photorequest", request: res.photos });
       if (res.spell) figma.ui.postMessage({ type: "spellrequest", texts: res.spell.texts });
       if (res.redesign) figma.ui.postMessage({ type: "redesignrequest", request: res.redesign });
       if (res.prototype) figma.ui.postMessage({ type: "protorequest", request: res.prototype });

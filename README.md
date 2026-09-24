@@ -19,7 +19,7 @@ No browser automation, no clipboard hacks: reads take ~5 ms, mutations ~30 ms, i
 - **macOS** gets the full setup: the bridge auto-starts via launchd. On Linux the bridge and CLI work, but you start the bridge yourself.
 - **Python 3.10+** (`brew install python`). The only dependency is `aiohttp`.
 - **[Claude Code](https://claude.com/claude-code)**, logged in. Needed for the panel chat and the Claude-powered buttons; the bridge, the CLI and the other buttons work without it.
-- Optional: a free [Freepik API key](https://www.freepik.com/developers) for one-click stock photos, and Playwright for web import (see below).
+- Optional: Playwright for web import (see below).
 
 ## Install
 
@@ -53,7 +53,6 @@ mistok "return figma.currentPage.name"     # the open page's name
 **Optional extras**
 
 - `./install.sh --with-import` adds Playwright and Chromium for web import: paste a URL into the panel chat and the page arrives as editable layers.
-- Add `FREEPIK_API_KEY=…` to `.env` in the repo for one-click photo fill (✨ Photos).
 
 **Update:** `git pull && ./install.sh`, then re-run the plugin in Figma. The panel tells you when the running plugin is older than the bridge.
 **Uninstall:** `./install.sh --uninstall`, then remove the plugin in Figma (Plugins → Development → Manage plugins).
@@ -133,8 +132,8 @@ From top to bottom:
 | Mobile | A 375 px mobile clone next to the frame, with reflowed auto-layouts, tighter paddings and smaller type |
 | Section | Wraps the selection in a Section and lays it out (pad / gap / cols) |
 | Grid | Snaps children to the frame's column grid (x and width) |
-| Reuse | Fills image slots with the most relevant images already in the file |
-| Photos | Fills image slots with stock photos: Freepik search plus Claude ranking. Without a key it saves a request for a Claude session. |
+| Reuse | Fills image slots with the best-matching photos already in the file |
+| Photos | Fills image slots with real public-domain photographs from [Openverse](https://openverse.org) (CC0, free for any use, no attribution). No key needed, and nothing marked as AI, render or illustration. Claude turns the texts near each slot into search queries, in any language. Images come at ~1000 px. |
 | Spell | Claude proofreads every text and applies the fixes, keeping styles and skipping texts you've edited since |
 | Redesign / Prototype / Design | Claude rebuilds the selection next to the original: a redesign after awwwards references, a minimal b/w prototype, or a 1:1 editable recreation of a screenshot, styled with the file's own variables and text styles. It streams progress and shows a preview with a *remove result* button. |
 | Lint / Contrast | Read-only audits (design-system drift, WCAG AA). The report lands next to the selection. |
@@ -150,7 +149,7 @@ To route a project's Figma work through Mistok instead of the Figma MCP, copy `r
 
 - The bridge listens on `127.0.0.1` only. It refuses requests carrying a browser `Origin` or a foreign `Host`, so a web page can't drive it.
 - `/exec` runs any JS you send in the open Figma file. Anything that can reach localhost:8787 from your machine has that power.
-- The chat and the Redesign / Prototype / Design buttons run Claude Code with `--dangerously-skip-permissions`, so it can use the `mistok` CLI unattended. Use them on files you trust: text inside a design becomes part of the prompt. Spell, Layout and photo ranking run Claude with no tools at all.
+- The chat and the Redesign / Prototype / Design buttons run Claude Code with `--dangerously-skip-permissions`, so it can use the `mistok` CLI unattended. Use them on files you trust: text inside a design becomes part of the prompt. Spell, Layout and photo search run Claude with no tools at all.
 
 ## Troubleshooting
 
@@ -169,7 +168,7 @@ Bridge log: `/tmp/mistok-bridge.log`. Self-test (a fake plugin and a fake Claude
 ## Layout
 
 ```
-bridge.py          HTTP/WS bridge + panel jobs (headless Claude, Freepik, web import) + limit bars
+bridge.py          HTTP/WS bridge + panel jobs (headless Claude, web import, Openverse photos) + limit bars
 mistok             CLI client
 webimport.py       web page → Figma layers (Playwright)
 install.sh         install / update / uninstall (launchd on macOS)

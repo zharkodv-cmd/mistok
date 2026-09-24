@@ -9,7 +9,7 @@ WebSocket (the Figma plugin connects here once it runs in Figma Desktop):
     WS   /plugin
 
 Panel jobs (chat, spellcheck, smart auto-layout, mobile, recreate/redesign/prototype,
-photo fill, web import) run headless Claude Code here and reply into the panel chat.
+web import, public-domain photos) run here and reply into the panel chat.
 
 Run:
     python bridge.py                 # 127.0.0.1:8787 (the plugin connects there)
@@ -543,115 +543,123 @@ async def run_protocol(kind: str, req: dict):
     return reply
 
 
-# ─── photo fill (Freepik) ───────────────────────────────────────────────────
+# ─── ✨ photos: public-domain photography (Openverse) ───────────────────────
 
-BAD_TITLE = ("3d", "render", "generative", "ai image", "miniature", "toy", "lineart",
-             "drawing", "illustration", "cartoon", "vector")
-RANK_PROMPT = (
-    "Pick stock photos for a premium brand design from their TITLES only (you can't see the "
-    "images — judge the titles). For each group, order candidate ids best first: titles that "
-    "match the group's context and read like real editorial photography; avoid titles that "
-    "suggest stock cliches, illustrations or text/watermarks. Give at least `need` ids per group. "
-    'Return ONLY JSON: {"groups":[{"i":<group index>,"ids":[<candidate ids in order>]}]}. Data: '
+OPENVERSE = "https://api.openverse.org/v1/images/"
+NOT_PHOTO = ("ai generated", "ai-generated", "ai art", "midjourney", "stable diffusion", "dall-e", "dalle",
+             "generative", "illustration", "render", "3d", "vector", "clipart", "cartoon", "drawing")
+PHOTO_PROMPT = (
+    "Turn each group's context (UI texts and layer names near an image slot, any language) into "
+    "search queries for a public-domain PHOTO library: English, 1-3 plain words each, concrete "
+    "subjects a photographer would tag (people, places, objects, activities) — no style or mood "
+    "words. 3 queries per group, most specific first, broadest last. "
+    'Return ONLY JSON: {"groups":[{"i":<group index>,"q":["...","...","..."]}]}. Groups: '
 )
 
 
-def _freepik_key():
-    """FREEPIK_API_KEY from the environment or the repo's .env."""
-    if os.environ.get("FREEPIK_API_KEY"):
-        return os.environ["FREEPIK_API_KEY"].strip()
-    try:
-        for line in (ROOT / ".env").read_text().splitlines():
-            k, _, v = line.partition("=")
-            if k.strip() == "FREEPIK_API_KEY" and v.strip():
-                return v.strip().strip("\"'")
-    except OSError:
-        pass
-    return None
-
-
-def _shrink(data: bytes, px: int = 2048) -> bytes:
-    """Fit a photo into px (macOS sips); elsewhere it goes as is (Figma's cap is 4096)."""
+def _figma_image(data: bytes, px: int = 2048) -> bytes:
+    """Bytes Figma's createImage takes: JPEG/PNG/GIF, big ones shrunk to px. macOS sips
+    converts the rest (Rawpixel serves WebP whatever you ask); elsewhere they raise."""
+    native = data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n" or data[:4] == b"GIF8"
     if not shutil.which("sips"):
-        return data
+        if native:
+            return data
+        raise ValueError("unsupported image format (converting needs macOS sips)")
     with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "photo.jpg"
-        p.write_bytes(data)
-        subprocess.run(["sips", "-Z", str(px), str(p)], capture_output=True, timeout=60)
-        return p.read_bytes()
+        src, out = Path(d) / "in", Path(d) / "out.jpg"
+        src.write_bytes(data)
+        info = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(src)],
+                              capture_output=True, text=True, timeout=30).stdout
+        big = max([int(x.split()[-1]) for x in info.splitlines() if "pixel" in x] or [0]) > px
+        if native and not big:
+            return data
+        subprocess.run(["sips", "-s", "format", "jpeg", *(["-Z", str(px)] if big else []), str(src), "--out", str(out)],
+                       capture_output=True, timeout=60)  # -Z only when big: it upscales small images too
+        if out.exists() and out.stat().st_size:
+            return out.read_bytes()
+    raise ValueError("unsupported image format")
 
 
-async def run_images(req: dict):
-    """✨ image slots ← Freepik stock photos: search per slot context, haiku ranks, insert.
-    Without a key the saved request waits for a Claude session («insert the images»)."""
-    save_request("mistok-image-request.json", req)
+async def run_photos(req: dict):
+    """✨ image slots ← real photographs from Openverse, public domain only (CC0/PDM: StockSnap,
+    Rawpixel, Flickr, Wikimedia…): free for any use, no key, no attribution, no AI images.
+    haiku turns each slot's nearby texts (any language) into short English queries."""
+    # ponytail: Openverse serves ~1000 px renditions, so hero-size slots get upscaled;
+    # a keyed source (Pexels) would add full-size photos if that ever matters.
+    # Anonymous quota: 20 requests/min, 200/day — one search per theme, broadened only on a miss.
     slots = req.get("slots") or []
-    key = _freepik_key()
-    if not key:
-        return ("Request saved to /tmp/mistok-image-request.json. One-click fill needs FREEPIK_API_KEY "
-                "in mistok/.env (free key: freepik.com/developers); or tell Claude in a session: insert the images")
     if not slots:
-        return "no image slots in the request"
+        return "no image slots in the selection"
     groups = {}
     for s in slots:  # theme = nearby texts; without them, the frame and layer names
-        sig = (" | ".join(s.get("context") or [])[:120]
+        sig = (" | ".join(s.get("context") or [])[:160]
                or f"{s.get('parent') or ''} {s.get('name') or ''}".strip() or "photo")
         groups.setdefault(sig, []).append(s)
-    await status("imggen", f"searching photos: {len(groups)} themes / {len(slots)} slots…")
-    async with ClientSession(headers={"x-freepik-api-key": key}, timeout=ClientTimeout(total=60)) as http:
-        cands = []
-        for sig, ss in groups.items():
+    themes = list(groups.items())
+    await status("photos", f"searching photos: {len(themes)} themes / {len(slots)} slots…")
+    plan = await ask_json(PHOTO_PROMPT + json.dumps([{"i": i, "context": sig} for i, (sig, _) in enumerate(themes)],
+                                                    ensure_ascii=False), model="haiku", timeout=90, kind="photos")
+    queries = {}
+    if isinstance(plan, dict):
+        for g in plan.get("groups") or []:
+            if isinstance(g, dict):
+                queries[g.get("i")] = [q for q in g.get("q") or [] if isinstance(q, str) and q.strip()]
+    done, used, missing, err, budget = 0, set(), [], None, 18
+    async with ClientSession(headers={"User-Agent": "Mistok (Figma plugin; openverse client)"},
+                             timeout=ClientTimeout(total=60)) as http:
+        for i, (sig, ss) in enumerate(themes):
             ar = ss[0]["w"] / max(ss[0]["h"], 1)
-            orient = "landscape" if ar > 1.25 else "portrait" if ar < 0.8 else "square"
-            params = {"term": sig.split("|")[0].strip()[:60] or "photo", "limit": "30", "page": "1",
-                      "filters[content_type][photo]": "1", f"filters[orientation][{orient}]": "1",
-                      "filters[ai-generated][excluded]": "1"}
-            async with http.get("https://api.freepik.com/v1/resources", params=params) as r:
-                data = await r.json(content_type=None)
-                if r.status != 200:
-                    raise RuntimeError(f"Freepik search HTTP {r.status}: {str(data)[:160]}")
-            cands.append([{"id": it.get("id"), "title": it.get("title")} for it in data.get("data") or []
-                          if not any(b in (it.get("title") or "").lower() for b in BAD_TITLE)][:15])
-        ranked = {}
-        if any(cands):
-            plan = await ask_json(RANK_PROMPT + json.dumps(
-                [{"i": i, "context": sig, "need": len(ss), "candidates": c}
-                 for i, ((sig, ss), c) in enumerate(zip(groups.items(), cands))], ensure_ascii=False),
-                model="haiku", timeout=120, kind="imggen")
-            if isinstance(plan, dict):
-                ranked = {g.get("i"): g.get("ids") for g in plan.get("groups") or [] if isinstance(g, dict)}
-        done, used, err, refused = 0, set(), None, False
-        for i, ((sig, ss), c) in enumerate(zip(groups.items(), cands)):
-            queue = [x for x in (ranked.get(i) or [x["id"] for x in c]) if x not in used]
-            for slot in ss:
-                if not queue or refused:
+            aspect = "wide" if ar > 1.25 else "tall" if ar < 0.8 else "square"
+            names = " ".join(re.findall(r"[A-Za-z]{3,}", sig)[:3])
+            picks = []
+            for q in (queries.get(i) or []) + ([names] if names else []):
+                for extra in ({"aspect_ratio": aspect, "size": "large"}, {}):  # exact first, then any shape
+                    if len(picks) >= len(ss) or budget <= 0:
+                        break
+                    budget -= 1
+                    params = {"q": q, "category": "photograph", "license": "cc0,pdm", "mature": "false",
+                              "page_size": "20", **extra}
+                    async with http.get(OPENVERSE, params=params) as r:
+                        if r.status == 429:
+                            raise RuntimeError("Openverse rate limit (anonymous: 20/min, 200/day) — try again later")
+                        data = await r.json(content_type=None)
+                    for it in data.get("results") or []:
+                        about = ((it.get("title") or "") + " " + " ".join(
+                            t.get("name", "") for t in it.get("tags") or [] if isinstance(t, dict))).lower()
+                        if (it.get("url") and it["url"] not in used and it not in picks
+                                and not any(b in about for b in NOT_PHOTO)):
+                            picks.append(it)
+                if len(picks) >= len(ss):
                     break
-                rid = queue.pop(0)
-                used.add(rid)
-                await status("imggen", f"inserting {done + 1}/{len(slots)}…")
-                try:
-                    async with http.get(f"https://api.freepik.com/v1/resources/{rid}/download") as r:
-                        dl = await r.json(content_type=None)
-                    url = (dl.get("data") or {}).get("url") or dl.get("url")
-                    if not url:
-                        err = f"Freepik download HTTP {r.status}: {dl.get('message') or str(dl)[:160]}"
-                        refused = r.status in (401, 402, 403, 422)  # key/plan problem: all slots would fail
+            if not picks:
+                missing.append(((queries.get(i) or [names or sig])[0])[:40])
+            for slot in ss:  # a candidate that won't download or decode just yields to the next one
+                await status("photos", f"inserting {done + 1}/{len(slots)}…")
+                while picks:
+                    it = picks.pop(0)
+                    if it["url"] in used:
                         continue
-                    async with http.get(url) as r:
-                        body = await r.read()
-                    b64 = base64.b64encode(await asyncio.to_thread(_shrink, body)).decode()
-                    await plugin_value(
-                        f"const n = await figma.getNodeByIdAsync({json.dumps(slot['id'])});"
-                        "if (!n) throw new Error('slot is gone');"
-                        f"const img = figma.createImage(figma.base64Decode({json.dumps(b64)}));"
-                        "n.fills = [{type: 'IMAGE', imageHash: img.hash, scaleMode: 'FILL'}];", 60)
-                    done += 1
-                except Exception as e:
-                    err = f"{type(e).__name__}: {e}"
-                    print(f"[imggen] slot {slot.get('id')}: {e!r}", flush=True)
-    empty = [sig.split("|")[0].strip()[:40] for (sig, _), c in zip(groups.items(), cands) if not c]
-    reply = {"text": f"inserted {done}/{len(slots)} photos ({len(groups)} themes, Freepik)"
-                     + (f" — no results for: {', '.join(empty)}" if empty else "")
+                    try:
+                        async with http.get(it["url"]) as r:
+                            if r.status != 200:
+                                raise RuntimeError(f"HTTP {r.status} from {it.get('source')}")
+                            body = await r.read()
+                        b64 = base64.b64encode(await asyncio.to_thread(_figma_image, body)).decode()
+                        await plugin_value(
+                            f"const n = await figma.getNodeByIdAsync({json.dumps(slot['id'])});"
+                            "if (!n) throw new Error('slot is gone');"
+                            f"const img = figma.createImage(figma.base64Decode({json.dumps(b64)}));"
+                            "n.fills = [{type: 'IMAGE', imageHash: img.hash, scaleMode: 'FILL'}];", 60)
+                        used.add(it["url"])
+                        done += 1
+                        break
+                    except Exception as e:
+                        err = f"{type(e).__name__}: {e}"
+                        print(f"[photos] slot {slot.get('id')}: {e!r}", flush=True)
+                        if "slot is gone" in str(e):
+                            break
+    reply = {"text": f"inserted {done}/{len(slots)} public-domain photos (Openverse)"
+                     + (f" — nothing found for: {', '.join(missing)}" if missing else "")
                      + (f" — {err}" if err and done < len(slots) else "")}
     fid = (req.get("frame") or {}).get("id")
     if fid and done:
@@ -704,8 +712,8 @@ async def on_plugin_message(m: dict):
         await spawn("mobile", run_mobileplan, m.get("request") or {})
     elif t in PROTOCOL_MSGS:
         await spawn(PROTOCOL_MSGS[t], run_protocol, PROTOCOL_MSGS[t], m.get("request") or {})
-    elif t == "imgrequest":
-        await spawn("imggen", run_images, m.get("request") or {})
+    elif t == "photorequest":
+        await spawn("photos", run_photos, m.get("request") or {})
     elif t == "kill":
         running = list(TASKS)
         for task in TASKS.values():

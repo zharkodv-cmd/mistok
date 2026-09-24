@@ -90,7 +90,6 @@ async def main():
     tmp = Path(tempfile.mkdtemp(prefix="mistok-test-"))
     bridge.TMP, bridge.CHAT_SESSION = tmp, tmp / "chat-session"
     bridge._claude_limits = lambda: None          # no network in tests
-    bridge._freepik_key = lambda: None
     fake = tmp / "claude"
     fake.write_text(FAKE_CLAUDE)
     fake.chmod(0o755)
@@ -151,8 +150,8 @@ async def main():
             assert m["node"] == "1:9" and m["img"].startswith("data:image/png") and "[node:" not in m["text"], m
         assert (tmp / "mistok-prototype-request.json").exists()
 
-        await ws.send_json({"type": "imgrequest", "request": {"slots": []}})
-        assert "FREEPIK_API_KEY" in (await expect(inbox, reply("imggen")))["text"]
+        await ws.send_json({"type": "photorequest", "request": {"slots": []}})
+        assert "no image slots" in (await expect(inbox, reply("photos")))["text"]
 
         await ws.send_json({"type": "chat", "text": "slow one"})
         await expect(inbox, lambda m: m.get("type") == "chatstatus" and m.get("task") == "chat")

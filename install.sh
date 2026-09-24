@@ -119,4 +119,4 @@ if [ -n "$CLAUDE_BIN" ]; then
 else
   echo "Claude Code not found — the chat and Claude buttons need it: https://claude.com/claude-code, then re-run ./install.sh"
 fi
-echo "Optional: FREEPIK_API_KEY=… in $ROOT/.env for one-click photo fill; ./install.sh --with-import for web import."
+echo "Optional: ./install.sh --with-import for web import (a URL in the panel chat)."

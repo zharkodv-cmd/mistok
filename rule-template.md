@@ -33,7 +33,7 @@ When the user asks to fill frames/sections with images — search & download REA
 - Forbidden in results: text/watermarks, oversaturated HDR look, generic-stock feel, anatomy artifacts. If a result looks like AI slop or a generic stock cliché — pick another photo; do not insert it.
 - Match resolution/aspect to the target node (size known from `spec`). Insert: bytes → `figma.createImage(bytes)` → IMAGE fill, `scaleMode: 'FILL'`.
 - For hero/key placements generate 2–3 variants and show the user before mass-filling.
-- **Plugin ✨ Photos button** fills slots by itself when the bridge has a `FREEPIK_API_KEY`; otherwise it writes a request to `/tmp/mistok-image-request.json` (frame, slots with ids/sizes/nearby texts). When the user says «встав картинки» — read it, find & download matching premium photos per the quality bar above, insert each via `mistok img <slotId> file.png`, then delete the request file.
+- The plugin's **✨ Photos** button fills image slots with real public-domain photos from Openverse (no key, no AI images); **Reuse** fills them from photos already in the file. When the user says «встав картинки» in a session — `mistok sel`, pick photos per the quality bar above, insert each via `mistok img <slotId> file.png`.
 
 ## Cautions
 

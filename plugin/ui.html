@@ -278,7 +278,7 @@ const bubbles = new Map(); // key → бульбашка «thinking…» ціє�
 const BG_LABELS = { spell: "spellchecking (Claude)…", autolayout: "auto-layout planning (Claude)…",
   mobile: "mobile adaptation (Claude)…", recreate: "recreating design (Claude)…",
   redesign: "redesigning (Claude)…", prototype: "building prototype (Claude)…",
-  imggen: "fetching photos (Freepik)…" };
+  photos: "fetching photos (Openverse)…" };
 let busySince = 0;
 const kindOf = (key) => (key.startsWith("op:") || key.startsWith("bg:") ? key.slice(3) : key);
 const taskKey = (task) => (task && task !== "chat" ? "bg:" + task : "chat");
@@ -542,7 +542,7 @@ const ICONS = {
   textstyle: I('<path d="M3 4.8V3h10v1.8M8 3v10M6.2 13h3.6"/>'),
   sectionize: I('<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/>'),
   imgreuse: I('<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="6" cy="6.5" r="1"/><path d="M2.5 11l3-3 2.5 2.5L11 7.5l2.5 2.5"/>'),
-  imggen: I('<path d="M8 2.5l1.2 3.3L12.5 7 9.2 8.2 8 11.5 6.8 8.2 3.5 7l3.3-1.2L8 2.5z"/><path d="M12.5 11l.5 1.2 1.2.5-1.2.5-.5 1.2-.5-1.2-1.2-.5 1.2-.5.5-1.2z"/>'),
+  photos: I('<path d="M8 2.5l1.2 3.3L12.5 7 9.2 8.2 8 11.5 6.8 8.2 3.5 7l3.3-1.2L8 2.5z"/><path d="M12.5 11l.5 1.2 1.2.5-1.2.5-.5 1.2-.5-1.2-1.2-.5 1.2-.5.5-1.2z"/>'),
   autolayout: I('<rect x="3.5" y="2.5" width="9" height="4.5" rx="1"/><rect x="3.5" y="9" width="9" height="4.5" rx="1"/>'),
   mobile: I('<rect x="4.5" y="1.5" width="7" height="13" rx="1.5"/><path d="M7 12.2h2"/>'),
   grid: I('<path d="M5.5 2.5v11M10.5 2.5v11M2.5 5.5h11M2.5 10.5h11"/>'),
@@ -567,8 +567,8 @@ const OP_BTNS = [
   { kind: "mobile", tip: "Mobile", title: "Clone the frame next to it as a 375px mobile version — reflowed auto-layouts, adapted paddings & type" },
   { kind: "sectionize", tip: "Section", title: "Wrap selection into a Section (pad/gap/cols below)" },
   { kind: "grid", tip: "Grid", title: "Snap children to the frame's column layout grid (x and width)" },
-  { kind: "imgreuse", tip: "Reuse", title: "Image slots ← relevant images from the whole file" },
-  { kind: "imggen", tip: "Photos", title: "Image slots ← stock photos: Freepik API (FREEPIK_API_KEY), else a request for a Claude session" },
+  { kind: "imgreuse", tip: "Reuse", title: "Image slots ← the best-matching photos already in this file" },
+  { kind: "photos", tip: "Photos", title: "Image slots ← real public-domain photos (Openverse: CC0, no AI images, no key), matched to nearby texts" },
   { kind: "spell", tip: "Spell", title: "Spellcheck all texts via Claude: fixes applied automatically, styles kept" },
   { kind: "redesign", tip: "Redesign", title: "Any selection → awwwards reference hunt → redesigned next to it by Claude" },
   { kind: "prototype", tip: "Prototype", title: "Wireframe/sketch/texts → minimalist b/w prototype (Inter) next to it, by Claude" },
