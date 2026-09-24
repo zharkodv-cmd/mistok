@@ -524,7 +524,7 @@ async def run_protocol(kind: str, req: dict):
                     await status(kind, f"{label}: {block.get('name', '')}" + (f" · {hint[:48]}" if hint else ""))
                     break
 
-    workdir = TMP / "mistok-run"
+    workdir = TMP / f"mistok-{kind}-run"  # own folder per kind: the three protocols can run at once
     workdir.mkdir(exist_ok=True)
     args = ["--model", req.get("model") or "opus", *(["--effort", req["effort"]] if req.get("effort") else []),
             "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",

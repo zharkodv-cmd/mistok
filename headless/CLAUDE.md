@@ -1,6 +1,6 @@
 # Mistok headless protocols (lean context)
 
-You drive Figma through the `mistok` CLI (on PATH). Bridge: localhost:8787, operates on the currently open file. You run headless in a scratch folder: write temp files (shots etc.) there or in /tmp.
+You drive Figma through the `mistok` CLI (on PATH). Bridge: localhost:8787, operates on the currently open file. You run headless in a scratch folder of your own: write temp files (shots etc.) THERE, never loose in /tmp — other protocol sessions may be running at the same time.
 
 ## CLI cheatsheet
 ```
