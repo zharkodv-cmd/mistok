@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Mistok bridge: HTTP -> WS -> Figma plugin -> back.
 
-HTTP API (clients like curl / mistok CLI talk here):
+HTTP API (the mistok CLI, curl, scripts):
     POST /exec     {"code": "...", "timeout": 60} -> {ok, result, value, logs, elapsed_ms}
     GET  /status                                  -> {plugin_connected, pending}
 
-WebSocket (the Figma plugin connects here once it's opened in Figma Desktop):
+WebSocket (the Figma plugin connects here once it runs in Figma Desktop):
     WS   /plugin
 
+Panel jobs (chat, spellcheck, smart auto-layout, mobile, recreate/redesign/prototype,
+photo fill, web import) run headless Claude Code here and reply into the panel chat.
+
 Run:
-    python bridge.py                 # default 127.0.0.1:8787
-    python bridge.py --port 9000
-    python bridge.py --host 0.0.0.0  # expose on LAN (not recommended)
+    python bridge.py                 # 127.0.0.1:8787 (the plugin connects there)
+    python bridge.py --port 9000     # tests only
 """
 
 import argparse
@@ -19,723 +21,115 @@ import asyncio
 import base64
 import json
 import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
 import time
+import urllib.error
+import urllib.request
 import uuid
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from aiohttp import web, WSMsgType
 
+from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
-PENDING: dict = {}        # rid -> {"future", "logs", "t0"}
+ROOT = Path(__file__).resolve().parent
+TMP = Path("/tmp")                     # request files + ops log; the protocols read them from here
+MAX_MSG = 256 * 1024 * 1024            # PNG exports of big frames easily pass 16 MB
+PLUGIN_VERSION = "3.0"                 # hello from plugin/ui.html must match
+CHAT_SESSION = ROOT / ".chat-session"  # the panel chat's own Claude Code conversation
+HEADLESS = ROOT / "headless" / "CLAUDE.md"
+PORT = 8787
+
 PLUGIN_WS: web.WebSocketResponse | None = None
-START_TIME = time.time()
+PENDING: dict = {}                     # exec id -> {"future", "logs"}
+TASKS: dict = {}                       # job kind -> asyncio.Task, one job per kind
 EXEC_COUNT = 0
 EXEC_ERRORS = 0
 EXEC_TIMES: deque = deque(maxlen=50)
 
-_usage_cache = {"t": 0.0, "data": None}
-_token_cache = {"t": 0.0, "token": None}
-_limits_cache = {"t": 0.0, "data": None}
+
+# ─── Claude subscription limits (panel bars) ────────────────────────────────
+
+_token = {"t": 0.0, "value": None}
+_limits = {"next": 0.0, "data": None}
 
 
 def _oauth_token():
-    """Claude Code OAuth token from macOS Keychain. Cached 10 min."""
-    import subprocess
+    """Claude Code OAuth token: macOS Keychain, else ~/.claude/.credentials.json. Cached 10 min."""
     now = time.time()
-    if _token_cache["token"] and now - _token_cache["t"] < 600:
-        return _token_cache["token"]
+    if _token["value"] and now - _token["t"] < 600:
+        return _token["value"]
+    raw = None
+    if sys.platform == "darwin":
+        try:
+            raw = subprocess.run(
+                ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+                capture_output=True, text=True, timeout=10).stdout
+        except (OSError, subprocess.SubprocessError):
+            pass
+    if not raw:
+        try:
+            raw = (Path.home() / ".claude" / ".credentials.json").read_text()
+        except OSError:
+            pass
     try:
-        raw = subprocess.run(
-            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
-            capture_output=True, text=True, timeout=10,
-        ).stdout.strip()
-        token = json.loads(raw).get("claudeAiOauth", {}).get("accessToken")
-    except Exception:
+        token = json.loads(raw)["claudeAiOauth"]["accessToken"]
+    except (TypeError, ValueError, KeyError):
         token = None
-    _token_cache["t"], _token_cache["token"] = now, token
+    _token.update(t=now, value=token)
     return token
 
 
 def _claude_limits():
-    """Subscription rate-limit bars (session / weekly) from the OAuth usage API. Cached 120s."""
-    import urllib.request
+    """Limit bars from the OAuth usage API, refreshed every 2 min. The endpoint 429s
+    easily: on any failure the last good bars stay and the next try is in 5 min."""
     now = time.time()
-    if _limits_cache["data"] is not None and now - _limits_cache["t"] < 120:
-        return _limits_cache["data"]
-    token = _oauth_token()
-    if not token:
-        return None
+    if now < _limits["next"]:
+        return _limits["data"]
     try:
-        req = urllib.request.Request(
-            "https://api.anthropic.com/api/oauth/usage",
-            headers={"Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20"},
-        )
+        token = _oauth_token()
+        if not token:
+            raise ValueError("not logged in to Claude Code")
+        req = urllib.request.Request("https://api.anthropic.com/api/oauth/usage", headers={
+            "Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20"})
         with urllib.request.urlopen(req, timeout=10) as r:
             d = json.loads(r.read())
-        out = []
-        for lim in d.get("limits") or []:
-            out.append({
-                "kind": lim.get("kind"),
-                "percent": lim.get("percent"),           # used, 0-100
-                "resets_at": lim.get("resets_at"),
-                "severity": lim.get("severity"),
-                "model": ((lim.get("scope") or {}).get("model") or {}).get("display_name"),
-            })
-    except Exception:
-        out = None  # keep None so we retry after cache expiry
-    _limits_cache["t"], _limits_cache["data"] = now, out
-    return out
-
-
-def _claude_usage():
-    """Today's Claude Code usage from ~/.claude/projects JSONL transcripts. Cached 60s."""
-    now = time.time()
-    if _usage_cache["data"] is not None and now - _usage_cache["t"] < 60:
-        return _usage_cache["data"]
-
-    root = Path.home() / ".claude" / "projects"
-    today = datetime.now().astimezone().date()
-    msgs = in_tok = out_tok = 0
-    latest_file, latest_mtime = None, 0.0
-
-    for p in root.glob("*/*.jsonl"):
-        try:
-            mtime = p.stat().st_mtime
-        except OSError:
-            continue
-        if mtime > latest_mtime:
-            latest_mtime, latest_file = mtime, p
-        if now - mtime > 26 * 3600:  # only files touched within ~a day
-            continue
-        try:
-            with open(p, encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    if '"usage"' not in line:
-                        continue
-                    try:
-                        e = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    ts = e.get("timestamp")
-                    u = (e.get("message") or {}).get("usage")
-                    if not ts or not u:
-                        continue
-                    try:
-                        d = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone().date()
-                    except ValueError:
-                        continue
-                    if d != today:
-                        continue
-                    msgs += 1
-                    in_tok += (u.get("input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0)
-                    out_tok += u.get("output_tokens") or 0
-        except OSError:
-            continue
-
-    # live session: duration (first→last timestamp), project name, last summary line
-    session_min = None
-    project = None
-    summary = None
-    if latest_file and now - latest_mtime < 30 * 60:
-        name = latest_file.parent.name  # e.g. -Users-x-Code-iflight-coast
-        project = name.split("-Code-", 1)[-1] if "-Code-" in name else name
-        first_ts = last_ts = None
-        try:
-            with open(latest_file, encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    if '"type":"summary"' in line:
-                        try:
-                            summary = json.loads(line).get("summary") or summary
-                        except json.JSONDecodeError:
-                            pass
-                    i = line.find('"timestamp":"')
-                    if i == -1:
-                        continue
-                    ts = line[i + 13:i + 13 + 24].split('"')[0]
-                    if first_ts is None:
-                        first_ts = ts
-                    last_ts = ts
-            if first_ts and last_ts:
-                t0 = datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
-                t1 = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
-                session_min = max(0, int((t1 - t0).total_seconds() // 60))
-        except (OSError, ValueError):
-            pass
-
-    data = {"msgs": msgs, "in_tok": in_tok, "out_tok": out_tok,
-            "session_min": session_min, "project": project, "summary": summary}
-    _usage_cache["t"], _usage_cache["data"] = now, data
-    return data
-
-
-CHAT_BUSY = False
-RUNNING: dict = {}  # kind -> subprocess (для kill)
-
-async def send_plugin(payload: dict):
-    """Надіслати в АКТУАЛЬНЕ з'єднання плагіна (плагін міг перепідключитись)."""
-    ws = PLUGIN_WS
-    if ws is not None and not ws.closed:
-        await ws.send_str(json.dumps(payload))
-
-
-async def run_chat(ws: web.WebSocketResponse, text: str, model: str = None, effort: str = None):
-    """Headless Claude Code turn triggered from the plugin's chat input."""
-    global CHAT_BUSY
-    if CHAT_BUSY:
-        await send_plugin({"type": "chatreply", "task": "chat", "text": "⏳ previous request still running"})
-        return
-    CHAT_BUSY = True
-    try:
-        import shutil
-        env = dict(os.environ)
-        env["PATH"] = env.get("PATH", "") + f":{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin"
-        claude = shutil.which("claude", path=env["PATH"])
-        if not claude:
-            await send_plugin({"type": "chatreply", "task": "chat", "text": "claude CLI not found in PATH"})
-            return
-        opts = []
-        if model:
-            opts += ["--model", model]
-        if effort:
-            opts += ["--effort", effort]
-        label = " · ".join(filter(None, [model, effort]))
-        await send_plugin({"type": "chatstatus", "task": "chat",
-                                      "text": "thinking…" + (f" ({label})" if label else "")})
-        cwd = str(Path.home() / "Code" / "mistok")
-
-        async def attempt(extra):
-            proc = await asyncio.create_subprocess_exec(
-                claude, "-p", text, "--dangerously-skip-permissions", *opts, *extra,
-                cwd=cwd, env=env,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            RUNNING["chat"] = proc
-            try:
-                out, err = await asyncio.wait_for(proc.communicate(), timeout=300)
-            except asyncio.TimeoutError:
-                proc.kill()
-                return None, "timeout 300s"
-            RUNNING.pop("chat", None)
-            return (out.decode("utf-8", "replace").strip() or None,
-                    err.decode("utf-8", "replace").strip())
-
-        out, err = await attempt(["--continue"])
-        if out is None and err != "timeout 300s":
-            out, err = await attempt([])  # перша розмова в цьому cwd — без --continue
-        reply = out or f"(empty reply{': ' + err[:300] if err else ''})"
-        await send_plugin({"type": "chatreply", "task": "chat", "text": reply[:6000]})
-        print(f"[chat] {len(text)}b → {len(reply)}b", flush=True)
+        _limits["data"] = [{
+            "kind": lim.get("kind"),
+            "percent": lim.get("percent"),      # used, 0-100
+            "resets_at": lim.get("resets_at"),
+            "severity": lim.get("severity"),
+            "model": ((lim.get("scope") or {}).get("model") or {}).get("display_name"),
+        } for lim in d.get("limits") or []]
+        _limits["next"] = now + 120
     except Exception as e:
-        try:
-            await send_plugin({"type": "chatreply", "task": "chat", "text": f"error: {e}"})
-        except Exception:
-            pass
-    finally:
-        CHAT_BUSY = False
-RUNNING: dict = {}  # kind -> subprocess (для kill)
-
-async def run_import(ws: web.WebSocketResponse, url: str):
-    """Веб-сторінка → редаговані шари Figma (webimport.py, Playwright)."""
-    try:
-        home = Path.home() / "Code" / "mistok"
-        py = str(home / "venv" / "bin" / "python")
-        await send_plugin({"type": "chatstatus", "task": "import", "text": "importing " + url + " …"})
-        proc = await asyncio.create_subprocess_exec(
-            py, str(home / "webimport.py"), url, cwd=str(home),
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        RUNNING["import"] = proc
-        try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=180)
-        except asyncio.TimeoutError:
-            proc.kill()
-            RUNNING.pop("import", None)
-            await send_plugin({"type": "chatreply", "task": "import", "text": "import: timeout 180s"})
-            return
-        RUNNING.pop("import", None)
-        tail = (out.decode("utf-8", "replace").strip().splitlines() or ["(empty)"])[-1]
-        if proc.returncode != 0:
-            tail += " | " + err.decode("utf-8", "replace").strip()[-300:]
-        await send_plugin({"type": "chatreply", "task": "import", "text": tail[:1500]})
-        print(f"[import] {url} → rc={proc.returncode}", flush=True)
-    except Exception as e:
-        print(f"[import] failed: {e}", flush=True)
-
-
-async def run_spell(ws: web.WebSocketResponse, texts: list):
-    """Вичитка текстів headless-Claude'ом і автозастосування виправлень."""
-    print(f"[spell] start: {len(texts)} texts", flush=True)
-    try:
-        import shutil
-        env = dict(os.environ)
-        env["PATH"] = env.get("PATH", "") + f":{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin"
-        claude = shutil.which("claude", path=env["PATH"])
-        if not claude:
-            return
-        prompt = (
-            "You are a proofreader. Fix spelling, grammar and punctuation errors in the texts below. "
-            "Preserve each text's language (Ukrainian stays Ukrainian, English stays English). "
-            "Do not change meaning, tone or length — only fix errors. "
-            "Return ONLY a JSON array of fixes, no explanations, only for texts that changed: "
-            '[{"id":"<id>","fixed":"<corrected text>"}]. If there are no errors, return []. '
-            "Texts: " + json.dumps(texts, ensure_ascii=False)
-        )
-        print("[spell] spawning claude…", flush=True)
-        proc = await asyncio.create_subprocess_exec(
-            claude, "-p", prompt, "--model", "haiku", "--dangerously-skip-permissions",
-            cwd=str(Path.home()), env=env,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        RUNNING["spell"] = proc
-        try:
-            out, _err = await asyncio.wait_for(proc.communicate(), timeout=240)
-        except asyncio.TimeoutError:
-            proc.kill()
-            print("[spell] TIMEOUT 240s", flush=True)
-            await send_plugin({"type": "chatreply", "task": "spell", "text": "Spellcheck: timeout"})
-            return
-        RUNNING.pop("spell", None)
-        raw = out.decode("utf-8", "replace")
-        print(f"[spell] claude done, {len(raw)}b out", flush=True)
-        start, end = raw.find("["), raw.rfind("]")
-        fixes = []
-        if start != -1 and end > start:
-            try:
-                fixes = [f for f in json.loads(raw[start:end + 1])
-                         if isinstance(f, dict) and f.get("id") and isinstance(f.get("fixed"), str)]
-            except json.JSONDecodeError:
-                pass
-        if not fixes:
-            await send_plugin({"type": "chatreply", "task": "spell", "text": "Spellcheck: no errors found ✓"})
-            print("[spell] no fixes", flush=True)
-            return
-        code = (
-            f"const FIX = {json.dumps(fixes, ensure_ascii=False)};"
-            "let ok = 0; const miss = [];"
-            "for (const f of FIX) {"
-            "  const n = await figma.getNodeByIdAsync(f.id);"
-            "  if (!n || n.type !== 'TEXT') { miss.push(f.id); continue; }"
-            "  try { await h.setText(n, f.fixed); ok++; } catch (e) { miss.push(f.id); }"
-            "}"
-            "figma.commitUndo();"
-            "figma.notify('Spellcheck: ' + ok + ' fixes' + (miss.length ? ', ' + miss.length + ' skipped' : ''));"
-            "return { ok, missed: miss.length };"
-        )
-        # синхронний urllib у to_thread — інакше дедлок із власним event loop
-        req = await asyncio.to_thread(
-            urllib_request_json, "http://127.0.0.1:8787/exec", {"code": code, "timeout": 60})
-        n_ok = (req.get("value") or {}).get("ok", 0)
-        await send_plugin({"type": "chatreply",
-                                      "text": f"Spellcheck: {n_ok} of {len(fixes)} fixes applied"})
-        print(f"[spell] applied {n_ok}/{len(fixes)}", flush=True)
-    except Exception as e:
-        print(f"[spell] failed: {e}", flush=True)
-
-
-def urllib_request_json(url, payload):
-    import urllib.request
-    req = urllib.request.Request(url, data=json.dumps(payload).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=70) as r:
-        return json.loads(r.read())
-
-
-
-async def run_alplan(request: dict):
-    """Smart auto-layout: Claude планує групування, bridge застосовує план."""
-    frames = request.get("frames") or []
-    if not frames:
-        return
-    print(f"[alplan] start: {len(frames)} frame(s)", flush=True)
-    try:
-        import shutil
-        env = dict(os.environ)
-        env["PATH"] = env.get("PATH", "") + f":{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin"
-        claude = shutil.which("claude", path=env["PATH"])
-        if not claude:
-            await send_plugin({"type": "chatreply", "task": "autolayout", "text": "auto-layout: claude CLI not found"})
-            return
-        prompt = (
-            "You are a senior product designer preparing Figma frames for auto-layout. "
-            "For each frame you get its size and direct children (id, name, type, x, y, w, h, text). "
-            "Decide what belongs together and output ONLY JSON, no prose:\n"
-            '{"frames":[{"frameId":"<id>","direction":"VERTICAL|HORIZONTAL","gap":<n>,"padding":[t,r,b,l],'
-            '"children":[<entries in final visual order>]}]}\n'
-            'Entry forms: {"type":"group","name":"<short>","direction":"HORIZONTAL|VERTICAL","gap":<n>,"ids":["..."]} '
-            'for items that belong together (visual rows/columns, icon+text pairs, label+value, card contents); '
-            '{"type":"node","id":"..."} for standalone items; '
-            '{"type":"node","id":"...","absolute":true} for full-bleed backgrounds (cover >60% of the frame) — keep those first. '
-            "Derive gap from the actual median spacing, padding from the content offsets to the frame edges. "
-            "Frames: " + json.dumps(frames, ensure_ascii=False)
-        )
-        proc = await asyncio.create_subprocess_exec(
-            claude, "-p", prompt, "--model", "sonnet", "--dangerously-skip-permissions",
-            cwd=str(Path.home()), env=env,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        RUNNING["spell"] = proc
-        try:
-            out, _err = await asyncio.wait_for(proc.communicate(), timeout=240)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await send_plugin({"type": "chatreply", "task": "autolayout", "text": "auto-layout: timeout"})
-            return
-        raw = out.decode("utf-8", "replace")
-        start, end = raw.find("{"), raw.rfind("}")
-        plan = None
-        if start != -1 and end > start:
-            try:
-                plan = json.loads(raw[start:end + 1])
-            except json.JSONDecodeError:
-                plan = None
-        if not plan or not plan.get("frames"):
-            await send_plugin({"type": "chatreply", "task": "autolayout", "text": "auto-layout: could not parse the plan"})
-            print(f"[alplan] parse fail: {raw[:200]}", flush=True)
-            return
-        code = (
-            "const PLAN = " + json.dumps(plan, ensure_ascii=False) + ";\n"
-            "const made = [];\n"
-            "for (const fp of PLAN.frames) {\n"
-            "  const f = await figma.getNodeByIdAsync(fp.frameId);\n"
-            "  if (!f || f.type !== 'FRAME') continue;\n"
-            "  const order = [];\n"
-            "  const absIds = [];\n"
-            "  for (const ch of (fp.children || [])) {\n"
-            "    if (ch.type === 'group') {\n"
-            "      const nodes = [];\n"
-            "      for (const id of (ch.ids || [])) { const n = await figma.getNodeByIdAsync(id); if (n && n.parent === f) nodes.push(n); }\n"
-            "      if (!nodes.length) continue;\n"
-            "      const minX = Math.min(...nodes.map(n => n.x)), minY = Math.min(...nodes.map(n => n.y));\n"
-            "      const maxX = Math.max(...nodes.map(n => n.x + n.width)), maxY = Math.max(...nodes.map(n => n.y + n.height));\n"
-            "      const w = figma.createFrame();\n"
-            "      f.appendChild(w);\n"
-            "      w.name = ch.name || 'group'; w.x = minX; w.y = minY;\n"
-            "      w.resize(Math.max(1, maxX - minX), Math.max(1, maxY - minY));\n"
-            "      w.fills = []; w.clipsContent = false;\n"
-            "      nodes.sort((a, b) => (ch.direction === 'VERTICAL' ? a.y - b.y : a.x - b.x));\n"
-            "      for (const n of nodes) { const ax = n.x - minX, ay = n.y - minY; w.appendChild(n); n.x = ax; n.y = ay; }\n"
-            "      w.layoutMode = ch.direction || 'HORIZONTAL';\n"
-            "      w.primaryAxisSizingMode = 'AUTO'; w.counterAxisSizingMode = 'AUTO';\n"
-            "      w.itemSpacing = typeof ch.gap === 'number' ? ch.gap : 16;\n"
-            "      order.push(w); made.push(w.name + 'x' + nodes.length);\n"
-            "    } else if (ch.id) {\n"
-            "      const n = await figma.getNodeByIdAsync(ch.id);\n"
-            "      if (n && n.parent === f) { order.push(n); if (ch.absolute) absIds.push(ch.id); }\n"
-            "    }\n"
-            "  }\n"
-            "  order.forEach((n, i) => f.insertChild(i, n));\n"
-            "  f.layoutMode = fp.direction || 'VERTICAL';\n"
-            "  f.primaryAxisSizingMode = 'FIXED'; f.counterAxisSizingMode = 'FIXED';\n"
-            "  if (typeof fp.gap === 'number') f.itemSpacing = fp.gap;\n"
-            "  if (Array.isArray(fp.padding) && fp.padding.length === 4) {\n"
-            "    f.paddingTop = fp.padding[0]; f.paddingRight = fp.padding[1];\n"
-            "    f.paddingBottom = fp.padding[2]; f.paddingLeft = fp.padding[3];\n"
-            "  }\n"
-            "  for (const id of absIds) { const n = await figma.getNodeByIdAsync(id); if (n) { try { n.layoutPositioning = 'ABSOLUTE'; } catch (e) {} } }\n"
-            "}\n"
-            "figma.commitUndo();\n"
-            "figma.notify('Smart auto-layout: ' + made.length + ' groups');\n"
-            "return { groups: made };"
-        )
-        resp = await asyncio.to_thread(
-            urllib_request_json, "http://127.0.0.1:8787/exec", {"code": code, "timeout": 90})
-        groups = ((resp.get("value") or {}).get("groups")) or []
-        await send_plugin({"type": "chatreply", "task": "autolayout",
-                          "text": "Smart auto-layout applied: " + (", ".join(groups) if groups else "structure set")})
-        print(f"[alplan] applied: {groups}", flush=True)
-    except Exception as e:
-        print(f"[alplan] failed: {e}", flush=True)
-
-
-
-async def run_protocol(phrase: str, label: str, timeout_s: int = 900, model: str = None, effort: str = None, kind: str = "proto"):
-    """Виконати протокол headless-сесією зі стрім-прогресом у панель."""
-    print(f"[proto-run] start: {label}", flush=True)
-    try:
-        import shutil
-        env = dict(os.environ)
-        env["PATH"] = env.get("PATH", "") + f":{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin"
-        claude = shutil.which("claude", path=env["PATH"])
-        if not claude:
-            await send_plugin({"type": "chatreply", "task": kind, "text": label + ": claude CLI not found"})
-            return
-        await send_plugin({"type": "chatstatus", "task": kind, "text": label + "…"})
-        opts = ["--model", model or "opus"]
-        if effort:
-            opts += ["--effort", effort]
-        proc = await asyncio.create_subprocess_exec(
-            claude, "-p", phrase, *opts,
-            "--output-format", "stream-json", "--verbose",
-            "--dangerously-skip-permissions",
-            cwd=str(Path.home() / "Code" / "mistok" / "headless"), env=env,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        RUNNING[kind] = proc
-        deadline = time.time() + timeout_s
-        final_text = None
-        last_status = 0.0
-        try:
-            while True:
-                remain = deadline - time.time()
-                if remain <= 0:
-                    proc.kill()
-                    await send_plugin({"type": "chatreply", "task": kind, "text": label + ": timeout"})
-                    return
-                try:
-                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=min(remain, 30))
-                except asyncio.TimeoutError:
-                    continue
-                if not line:
-                    break
-                try:
-                    evt = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                et = evt.get("type")
-                if et == "assistant":
-                    for блок in ((evt.get("message") or {}).get("content") or []):
-                        if блок.get("type") == "tool_use" and time.time() - last_status > 2:
-                            last_status = time.time()
-                            tn = блок.get("name", "")
-                            ti = блок.get("input") or {}
-                            hintt = ti.get("command") or ti.get("file_path") or ""
-                            await send_plugin({"type": "chatstatus", "task": kind,
-                                               "text": label + ": " + tn + (" · " + str(hintt)[:48] if hintt else "")})
-                elif et == "result":
-                    final_text = evt.get("result") or ""
-        finally:
-            RUNNING.pop(kind, None)
-        if proc.returncode is None:
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=10)
-            except asyncio.TimeoutError:
-                proc.kill()
-        if final_text is None:
-            err = (await proc.stderr.read()).decode("utf-8", "replace")[-300:]
-            await send_plugin({"type": "chatreply", "task": kind, "text": label + ": no result | " + err})
-            print(f"[proto-run] no result: {label}", flush=True)
-            return
-        report = final_text.strip()[:400]
-        # [node:ID] у звіті → прев'ю результату
-        import re as _re
-        m = _re.search(r"\[node:([0-9]+:[0-9]+)\]", final_text)
-        img_uri = None
-        if m:
-            nid = m.group(1)
-            code = (
-                f"const n = await figma.getNodeByIdAsync('{nid}');"
-                "if (!n) return null;"
-                "const scale = Math.min(1, 640 / Math.max(n.width, 1));"
-                "const bytes = await n.exportAsync({format: 'PNG', constraint: {type: 'SCALE', value: scale}});"
-                "return figma.base64Encode(bytes);"
-            )
-            try:
-                resp = await asyncio.to_thread(
-                    urllib_request_json, "http://127.0.0.1:8787/exec", {"code": code, "timeout": 60})
-                b64 = resp.get("value")
-                if resp.get("ok") and isinstance(b64, str) and len(b64) < 3_500_000:
-                    img_uri = "data:image/png;base64," + b64
-            except Exception:
-                pass
-            report = _re.sub(r"\s*\[node:[0-9]+:[0-9]+\]", "", report).strip()
-        payload = {"type": "chatreply", "task": kind, "text": report}
-        if img_uri:
-            payload["img"] = img_uri
-        if m:
-            payload["node"] = m.group(1)
-        await send_plugin(payload)
-        print(f"[proto-run] done: {label} rc={proc.returncode}", flush=True)
-    except Exception as e:
-        RUNNING.pop(kind, None)
-        print(f"[proto-run] failed: {e}", flush=True)
-
-
-def _freepik_key():
-    envf = Path.home() / "Code" / "mistok" / ".env"
-    try:
-        for line in envf.read_text().splitlines():
-            if line.startswith("FREEPIK_API_KEY="):
-                return line.split("=", 1)[1].strip()
-    except OSError:
-        pass
-    return None
-
-
-BAD_TITLE = ("3d", "render", "generative", "ai image", "miniature", "toy", "lineart",
-             "drawing", "illustration", "cartoon", "vector")
-
-
-async def run_images(request: dict):
-    """Auto image fill: Freepik search -> haiku ranking -> download -> insert."""
-    kind = "imggen"
-    slots = request.get("slots") or []
-    key = _freepik_key()
-    if not key:
-        await send_plugin({"type": "chatreply", "task": kind,
-            "text": "Request saved. For one-click mode add FREEPIK_API_KEY to mistok env file "
-                    "(free key: freepik.com/developers). For now tell Claude in a session: insert the images"})
-        return
-    if not slots:
-        await send_plugin({"type": "chatreply", "task": kind, "text": "no slots in the request"})
-        return
-    print(f"[imggen] start: {len(slots)} slots", flush=True)
-    import aiohttp
-    try:
-        groups = {}
-        for s in slots:
-            sig = " | ".join(s.get("context") or [])[:120] or s.get("name", "photo")
-            groups.setdefault(sig, []).append(s)
-        await send_plugin({"type": "chatstatus", "task": kind,
-                           "text": f"searching photos: {len(groups)} themes / {len(slots)} slots…"})
-        group_cands = []
-        async with aiohttp.ClientSession(headers={"x-freepik-api-key": key}) as http:
-            for sig, ss in groups.items():
-                q = sig.split("|")[0].strip()[:60] or "aviation"
-                ar = ss[0]["w"] / max(ss[0]["h"], 1)
-                orient = "landscape" if ar > 1.25 else ("portrait" if ar < 0.8 else "square")
-                params = {"term": q, "limit": "30", "page": "1",
-                          "filters[content_type][photo]": "1",
-                          "filters[orientation][" + orient + "]": "1",
-                          "filters[ai-generated][excluded]": "1"}
-                async with http.get("https://api.freepik.com/v1/resources", params=params, timeout=30) as r:
-                    data = await r.json()
-                items = data.get("data") or []
-                cands = []
-                for it in items:
-                    title = (it.get("title") or "").lower()
-                    if any(b in title for b in BAD_TITLE):
-                        continue
-                    cands.append({"id": it.get("id"), "title": it.get("title")})
-                group_cands.append({"sig": sig, "slots": ss, "cands": cands[:15]})
-
-        import shutil
-        env = dict(os.environ)
-        env["PATH"] = env.get("PATH", "") + f":{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin"
-        claude = shutil.which("claude", path=env["PATH"])
-        ranked = None
-        if claude and any(g["cands"] for g in group_cands):
-            prompt = (
-                "Rank stock photo candidates for premium aviation-brand cards. For each group pick the best "
-                "distinct photos (real photography feel, no stock cliches), enough to cover need. "
-                'Return ONLY JSON: {"groups":[{"i":<group index>,"ids":[<candidate ids in order>]}]}. Data: '
-                + json.dumps([{"i": i, "context": g["sig"], "need": len(g["slots"]),
-                               "candidates": g["cands"]} for i, g in enumerate(group_cands)],
-                             ensure_ascii=False)
-            )
-            proc = await asyncio.create_subprocess_exec(
-                claude, "-p", prompt, "--model", "haiku", "--dangerously-skip-permissions",
-                cwd=str(Path.home()), env=env,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            RUNNING[kind] = proc
-            try:
-                out, _e = await asyncio.wait_for(proc.communicate(), timeout=120)
-                raw = out.decode("utf-8", "replace")
-                s0, e0 = raw.find("{"), raw.rfind("}")
-                if s0 != -1:
-                    ranked = {g["i"]: g["ids"] for g in json.loads(raw[s0:e0 + 1]).get("groups", [])}
-            except (asyncio.TimeoutError, json.JSONDecodeError, KeyError, TypeError):
-                ranked = None
-            finally:
-                RUNNING.pop(kind, None)
-
-        import base64 as b64mod
-        import subprocess
-        import tempfile
-        done = 0
-        used = set()
-        async with aiohttp.ClientSession(headers={"x-freepik-api-key": key}) as http:
-            for gi, g in enumerate(group_cands):
-                order = (ranked or {}).get(gi) or [c["id"] for c in g["cands"]]
-                queue = [i for i in order if i not in used]
-                for slot in g["slots"]:
-                    rid = queue.pop(0) if queue else None
-                    if rid is None:
-                        continue
-                    used.add(rid)
-                    await send_plugin({"type": "chatstatus", "task": kind,
-                                       "text": f"inserting {done + 1}/{len(slots)}…"})
-                    try:
-                        async with http.get(f"https://api.freepik.com/v1/resources/{rid}/download",
-                                            timeout=30) as r:
-                            dl = await r.json()
-                        url = ((dl.get("data") or {}).get("url")) or dl.get("url")
-                        if not url:
-                            continue
-                        async with http.get(url, timeout=60) as r:
-                            body = await r.read()
-                        tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False).name
-                        open(tmp, "wb").write(body)
-                        subprocess.run(["sips", "-Z", "2048", tmp, "--out", tmp],
-                                       capture_output=True, timeout=60)
-                        img_b64 = b64mod.b64encode(open(tmp, "rb").read()).decode()
-                        os.unlink(tmp)
-                        code = (
-                            f"const n = await figma.getNodeByIdAsync('{slot['id']}');"
-                            "if (!n) return 'missing';"
-                            f"const img = figma.createImage(figma.base64Decode('{img_b64}'));"
-                            "n.fills = [{type: 'IMAGE', imageHash: img.hash, scaleMode: 'FILL'}];"
-                            "return 'ok';")
-                        resp = await asyncio.to_thread(
-                            urllib_request_json, "http://127.0.0.1:8787/exec",
-                            {"code": code, "timeout": 60})
-                        if resp.get("ok"):
-                            done += 1
-                    except Exception as e:
-                        print(f"[imggen] slot fail: {e}", flush=True)
-        img_uri = None
-        fid = (request.get("frame") or {}).get("id")
-        if fid and done:
-            code = (
-                f"const n = await figma.getNodeByIdAsync('{fid}');"
-                "if (!n) return null;"
-                "const scale = Math.min(1, 640 / Math.max(n.width, 1));"
-                "const bytes = await n.exportAsync({format: 'PNG', constraint: {type: 'SCALE', value: scale}});"
-                "figma.commitUndo(); return figma.base64Encode(bytes);")
-            try:
-                resp = await asyncio.to_thread(
-                    urllib_request_json, "http://127.0.0.1:8787/exec", {"code": code, "timeout": 60})
-                if resp.get("ok") and isinstance(resp.get("value"), str) and len(resp["value"]) < 3_500_000:
-                    img_uri = "data:image/png;base64," + resp["value"]
-            except Exception:
-                pass
-        payload = {"type": "chatreply", "task": kind,
-                   "text": f"inserted {done}/{len(slots)} photos ({len(groups)} themes, Freepik)"}
-        if img_uri:
-            payload["img"] = img_uri
-        await send_plugin(payload)
-        print(f"[imggen] done {done}/{len(slots)}", flush=True)
-    except Exception as e:
-        RUNNING.pop(kind, None)
-        await send_plugin({"type": "chatreply", "task": kind, "text": f"image fill failed: {e}"})
-        print(f"[imggen] failed: {e}", flush=True)
+        if isinstance(e, urllib.error.HTTPError) and e.code == 401:
+            _token["value"] = None              # Claude Code refreshed it; re-read next time
+        _limits["next"] = now + 300
+    return _limits["data"]
 
 
 async def stats_pusher(ws: web.WebSocketResponse):
-    """Push usage stats to the plugin UI every 60s while it's connected."""
+    """Exec counter + limit bars → panel, every 60 s while connected."""
     try:
         while not ws.closed:
-            usage = await asyncio.to_thread(_claude_usage)
             limits = await asyncio.to_thread(_claude_limits)
             await ws.send_str(json.dumps({
-                "type": "stats",
-                "uptime_s": int(time.time() - START_TIME),
-                "execs": EXEC_COUNT,
-                "errors": EXEC_ERRORS,
+                "type": "stats", "execs": EXEC_COUNT, "errors": EXEC_ERRORS,
                 "avg_ms": int(sum(EXEC_TIMES) / len(EXEC_TIMES)) if EXEC_TIMES else None,
-                "claude": usage,
                 "limits": limits,
             }))
             await asyncio.sleep(60)
-    except (ConnectionResetError, asyncio.CancelledError):
+    except (ConnectionError, RuntimeError, asyncio.CancelledError):
         pass
 
+
+# ─── exec: JS round-trip through the plugin ─────────────────────────────────
 
 ERROR_HINTS = [
     ("fills and strokes variable bindings must be set on paints directly",
@@ -768,271 +162,646 @@ ERROR_HINTS = [
 
 
 def find_hint(error_text):
-    if not error_text:
+    low = (error_text or "").lower()
+    return next((hint for needle, hint in ERROR_HINTS if needle.lower() in low), None)
+
+
+async def plugin_exec(code: str, timeout: float = 60) -> dict:
+    """Run JS in the plugin. Returns the /exec response body plus its HTTP "status"."""
+    global EXEC_COUNT, EXEC_ERRORS
+    ws = PLUGIN_WS
+    if ws is None or ws.closed:
+        return {"ok": False, "error": "plugin not connected — run the Mistok plugin in Figma", "status": 503}
+    EXEC_COUNT += 1
+    rid = str(uuid.uuid4())
+    entry = PENDING[rid] = {"future": asyncio.get_running_loop().create_future(), "logs": []}
+    t0 = time.time()
+    try:
+        await ws.send_str(json.dumps({"id": rid, "type": "exec", "code": code}))
+        msg = await asyncio.wait_for(entry["future"], timeout)
+    except asyncio.TimeoutError:
+        return {"ok": False, "error": f"timeout after {timeout:.0f}s", "status": 504}
+    except (ConnectionError, RuntimeError) as e:
+        return {"ok": False, "error": f"send to plugin failed: {e}", "status": 500}
+    finally:
+        PENDING.pop(rid, None)
+    elapsed_ms = int((time.time() - t0) * 1000)
+    EXEC_TIMES.append(elapsed_ms)
+    if msg.get("type") == "error":
+        EXEC_ERRORS += 1
+        error = msg.get("text") or "unknown error"
+        return {"ok": False, "error": error, "hint": find_hint(error), "stack": msg.get("stack"),
+                "logs": entry["logs"], "elapsed_ms": elapsed_ms, "status": 500}
+    return {"ok": True, "result": msg.get("text", ""), "value": msg.get("value"),
+            "logs": entry["logs"], "elapsed_ms": elapsed_ms}
+
+
+async def plugin_value(code: str, timeout: float = 60):
+    """plugin_exec for the bridge's own jobs: the returned value, or RuntimeError."""
+    res = await plugin_exec(code, timeout)
+    if not res["ok"]:
+        raise RuntimeError(res["error"])
+    return res.get("value")
+
+
+async def preview(node_id: str):
+    """≤640px PNG of a node as a data URI for the panel chat; None if it can't be made."""
+    code = (f"const n = await figma.getNodeByIdAsync({json.dumps(node_id)});"
+            "if (!n) return null;"
+            "const s = Math.min(1, 640 / Math.max(n.width, 1));"
+            "return figma.base64Encode(await n.exportAsync({format: 'PNG', constraint: {type: 'SCALE', value: s}}));")
+    try:
+        b64 = await plugin_value(code, 60)
+    except RuntimeError:
         return None
-    low = error_text.lower()
-    for needle, hint in ERROR_HINTS:
-        if needle.lower() in low:
-            return hint
+    return "data:image/png;base64," + b64 if isinstance(b64, str) and len(b64) < 3_500_000 else None
+
+
+# ─── headless Claude Code ───────────────────────────────────────────────────
+
+# one-shot text-in/JSON-out calls: no tools, hooks, plugins, MCP or saved session
+LEAN = ["--safe-mode", "--tools", "", "--no-session-persistence"]
+
+
+def _claude_cmd():
+    """claude binary + env. MISTOK_CLAUDE (set by install.sh) wins; else PATH search.
+    The venv and the repo go first on PATH (python3 with playwright, the mistok CLI),
+    the usual install dirs after — launchd's PATH is bare."""
+    dirs = [str(Path(sys.executable).parent), str(ROOT), str(Path.home() / ".local" / "bin"),
+            "/opt/homebrew/bin", "/usr/local/bin", os.environ.get("PATH", "")]
+    env = {**os.environ, "PATH": os.pathsep.join(dirs)}
+    env.pop("CLAUDECODE", None)  # started from inside a Claude Code session: allow nesting
+    exe = os.environ.get("MISTOK_CLAUDE") or shutil.which("claude", path=env["PATH"])
+    if not exe:
+        raise RuntimeError("claude CLI not found — install Claude Code, log in, re-run install.sh")
+    return exe, env
+
+
+def _kill(proc):
+    """Kill the job's whole process group — claude plus every tool it spawned."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)  # start_new_session → pid is the group id
+    except (AttributeError, OSError):        # Windows, or already gone
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+
+
+async def claude(prompt: str, args: list, *, timeout: float, cwd: Path = ROOT, on_event=None):
+    """`claude -p <args>` with the prompt on stdin (no argv limits, no '-' parsing surprises).
+    Returns (returncode, output). With on_event: stream-json mode, each event is passed to
+    `await on_event(evt)` and the output is the tail of non-JSON lines."""
+    exe, env = _claude_cmd()
+    proc = await asyncio.create_subprocess_exec(
+        exe, "-p", *args, cwd=str(cwd), env=env, limit=MAX_MSG, start_new_session=True,
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT if on_event else asyncio.subprocess.PIPE)
+    try:
+        if on_event is None:
+            out, err = await asyncio.wait_for(proc.communicate(prompt.encode()), timeout)
+            text = out + (b"\n" + err if proc.returncode else b"")  # stderr only to explain a failure
+            return proc.returncode, text.decode("utf-8", "replace").strip()
+        proc.stdin.write(prompt.encode())
+        await proc.stdin.drain()
+        proc.stdin.close()
+        tail = deque(maxlen=20)
+
+        async def pump():
+            async for line in proc.stdout:
+                try:
+                    evt = json.loads(line)
+                except ValueError:
+                    tail.append(line.decode("utf-8", "replace").strip())
+                    continue
+                if isinstance(evt, dict):
+                    await on_event(evt)
+            return await proc.wait()
+
+        rc = await asyncio.wait_for(pump(), timeout)
+        return rc, "\n".join(tail)
+    except asyncio.TimeoutError:
+        raise RuntimeError(f"timeout after {int(timeout)}s") from None
+    finally:
+        _kill(proc)
+
+
+async def ask_json(prompt: str, *, model: str, timeout: float, kind: str):
+    """One-shot structured answer: the outermost {...} or [...] of the reply, parsed; None if absent."""
+    rc, out = await claude(prompt, ["--model", model, *LEAN], timeout=timeout)
+    starts = [i for i in (out.find("{"), out.find("[")) if i != -1]
+    if rc == 0 and starts:
+        s = min(starts)
+        e = out.rfind("}" if out[s] == "{" else "]")
+        try:
+            return json.loads(out[s:e + 1])
+        except ValueError:
+            pass
+    print(f"[{kind}] no JSON in reply (rc={rc}): {out[:200]!r}", flush=True)
     return None
+
+
+# ─── panel jobs ─────────────────────────────────────────────────────────────
+
+async def send_plugin(payload: dict):
+    """Send to the CURRENT plugin connection — it may have reconnected since the job began."""
+    ws = PLUGIN_WS
+    if ws is not None and not ws.closed:
+        try:
+            await ws.send_str(json.dumps(payload))
+        except (ConnectionError, RuntimeError):
+            pass
+
+
+async def status(kind: str, text: str):
+    await send_plugin({"type": "chatstatus", "task": kind, "text": text})
+
+
+async def spawn(kind: str, job, *args):
+    """Run job(*args) in the background, one per kind. Its return value (text, or a dict
+    with text/img/node) is the final reply; errors and cancels reply too, so the panel
+    never hangs on a spinner."""
+    if kind in TASKS:
+        await send_plugin({"type": "chatreply", "task": kind, "text": f"⏳ {kind}: the previous run is still going"})
+        return
+
+    async def run():
+        try:
+            res = await job(*args)
+        except asyncio.CancelledError:
+            res = "✕ cancelled"
+        except Exception as e:
+            print(f"[{kind}] failed: {e!r}", flush=True)
+            res = f"{kind} failed: {e}"
+        finally:
+            TASKS.pop(kind, None)
+        await send_plugin({"type": "chatreply", "task": kind,
+                           **(res if isinstance(res, dict) else {"text": str(res)})})
+
+    TASKS[kind] = asyncio.create_task(run())
+
+
+def save_request(name: str, req: dict) -> dict:
+    """Request files are the protocols' input (and let a regular Claude session take over)."""
+    req["ts"] = datetime.now().astimezone().isoformat(timespec="seconds")
+    (TMP / name).write_text(json.dumps(req, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"[request] {name}: {(req.get('frame') or {}).get('name')}", flush=True)
+    return req
+
+
+async def run_chat(text: str, model: str | None, effort: str | None):
+    """Panel chat → headless Claude Code in the repo (its CLAUDE.md, all tools, the mistok CLI).
+    Keeps a conversation of its own: `--continue` would hijack a terminal session in this folder."""
+    opts = (["--model", model] if model else []) + (["--effort", effort] if effort else [])
+    await status("chat", "thinking…" + (f" ({' · '.join(filter(None, [model, effort]))})" if opts else ""))
+    sid = CHAT_SESSION.read_text().strip() if CHAT_SESSION.exists() else ""
+    flag = "--resume" if sid else "--session-id"
+    sid = sid or str(uuid.uuid4())
+    rc, out = await claude(text, [flag, sid, "--dangerously-skip-permissions", *opts], timeout=600)
+    if rc and flag == "--resume" and "No conversation found" in out:  # session file outlived its transcript
+        sid = str(uuid.uuid4())
+        rc, out = await claude(text, ["--session-id", sid, "--dangerously-skip-permissions", *opts], timeout=600)
+    if rc:
+        return f"chat failed: {out[-300:]}"
+    CHAT_SESSION.write_text(sid)
+    return out[:6000] or "(empty reply)"
+
+
+async def run_import(url: str):
+    """Web page → editable Figma layers (webimport.py, Playwright)."""
+    await status("import", f"importing {url} …")
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, str(ROOT / "webimport.py"), url, "--port", str(PORT), cwd=str(ROOT),
+        stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT, start_new_session=True)
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), 180)
+    except asyncio.TimeoutError:
+        raise RuntimeError("timeout after 180s") from None
+    finally:
+        _kill(proc)
+    lines = out.decode("utf-8", "replace").strip().splitlines()
+    return lines[-1][:1500] if lines else "import: no output"
+
+
+SPELL_PROMPT = (
+    "You are a careful proofreader for UI copy in Figma. Fix ONLY objective errors: "
+    "spelling, grammar, punctuation. "
+    "Preserve each text's language (Ukrainian stays Ukrainian, English stays English), "
+    "meaning, tone, casing, line breaks and emoji exactly. "
+    "Headings and labels are legitimate sentence fragments — never 'complete' them or add final periods. "
+    "Never touch brand/product names, numbers, URLs, emails, code or ids. "
+    "Ukrainian: correct apostrophe (м'який) and «» quotes count as punctuation fixes; "
+    "do not restyle otherwise-correct text. "
+    "Return ONLY a JSON array of fixes, no explanations, only for texts that changed: "
+    '[{"id":"<id>","fixed":"<corrected text>"}]. If there are no errors, return []. '
+    "Texts: "
+)
+
+
+async def run_spell(texts: list):
+    """Proofread the selection's texts with haiku and apply the fixes — skipping any text
+    edited in Figma meanwhile."""
+    if not texts:
+        return "Spellcheck: no texts"
+    await status("spell", f"spellchecking {len(texts)} texts…")
+    orig = {t.get("id"): t.get("text") for t in texts}
+    fixes = await ask_json(SPELL_PROMPT + json.dumps(texts, ensure_ascii=False),
+                           model="haiku", timeout=240, kind="spell")
+    if not isinstance(fixes, list):
+        return "Spellcheck: couldn't read Claude's answer — try again"
+    fixes = [{"id": f["id"], "fixed": f["fixed"], "orig": orig[f["id"]]} for f in fixes
+             if isinstance(f, dict) and f.get("id") in orig and isinstance(f.get("fixed"), str)
+             and f["fixed"] != orig[f["id"]]]
+    if not fixes:
+        return "Spellcheck: no errors found ✓"
+    code = (
+        f"const FIX = {json.dumps(fixes, ensure_ascii=False)};"
+        "let ok = 0, stale = 0;"
+        "for (const f of FIX) {"
+        "  const n = await figma.getNodeByIdAsync(f.id);"
+        "  if (!n || n.type !== 'TEXT' || n.characters !== f.orig) { stale++; continue; }"
+        "  try { await h.replaceText(n, f.fixed); ok++; } catch (e) { stale++; }"
+        "}"
+        "figma.notify('Spellcheck: ' + ok + ' fixes' + (stale ? ', ' + stale + ' skipped' : ''));"
+        "return { ok, stale };"
+    )
+    v = await plugin_value(code, 60) or {}
+    return (f"Spellcheck: {v.get('ok', 0)} of {len(fixes)} fixes applied"
+            + (f" ({v['stale']} skipped: text changed in Figma meanwhile)" if v.get("stale") else ""))
+
+
+AL_PROMPT = (
+    "You are a senior product designer preparing Figma frames for auto-layout. "
+    "For each frame you get its size and direct children: id, name, type, x, y, w, h, "
+    "plus flags — text (content), bg (covers most of the frame), img (has image fill), "
+    "al (already has auto-layout).\n"
+    "Decide the STRUCTURE only — grouping, order, direction, absolutes. "
+    "Do NOT output gap or padding numbers: they are computed from geometry.\n"
+    "Rules:\n"
+    "- Every child id appears EXACTLY once in the output — inside one group's ids or as a node. "
+    "Never drop or duplicate an id.\n"
+    "- absolute:true ONLY for true background/decor layers: bg:true, or a layer that clearly sits "
+    "behind/over other children as decoration. Real content is NEVER absolute. List absolutes first.\n"
+    "- Group only children that visually align in one row or column: icon+label, label+value, "
+    "button rows, card innards. If items overlap or their spacing is wildly irregular, "
+    "keep them as standalone nodes instead of forcing a group.\n"
+    "- Frame direction = the dominant stacking axis of the resulting top-level entries.\n"
+    "Output ONLY JSON, no prose:\n"
+    '{"frames":[{"frameId":"<id>","direction":"VERTICAL|HORIZONTAL",'
+    '"children":[<entries in final visual order>]}]}\n'
+    'Entry forms: {"type":"group","name":"<short>","direction":"HORIZONTAL|VERTICAL","ids":["..."]} | '
+    '{"type":"node","id":"..."} | {"type":"node","id":"...","absolute":true}\n'
+    "Frames: "
+)
+
+
+async def plan_layout(kind: str, frames: list) -> list:
+    """Claude (sonnet) plans structure for ≤4 frames per call; the plugin applies it with
+    gaps/paddings measured from geometry (h.alApply) and an axis heuristic for whatever
+    the plan missed — a failed or timed-out plan still gets the heuristic."""
+    chunks = [frames[i:i + 4] for i in range(0, len(frames), 4)]
+    made = []
+    for n, chunk in enumerate(chunks, 1):
+        await status(kind, f"planning auto-layout {n}/{len(chunks)}…")
+        try:
+            plan = await ask_json(AL_PROMPT + json.dumps(chunk, ensure_ascii=False),
+                                  model="sonnet", timeout=240, kind=kind)
+        except RuntimeError as e:
+            print(f"[{kind}] plan failed, heuristic only: {e}", flush=True)
+            plan = None
+        if not isinstance(plan, dict) or not isinstance(plan.get("frames"), list):
+            plan = {"frames": []}
+        made += await plugin_value(
+            f"return await h.alApply({json.dumps(plan, ensure_ascii=False)}, "
+            f"{json.dumps([f['id'] for f in chunk])});", 90) or []
+    return made
+
+
+async def run_alplan(req: dict):
+    made = await plan_layout("autolayout", req.get("frames") or [])
+    return "Smart auto-layout applied: " + (", ".join(made) or "structure set")
+
+
+async def run_mobileplan(req: dict):
+    """📱 the clones' free-placed frames get auto-layout first, then h.mreflow squeezes each to 375."""
+    made = await plan_layout("mobile", req.get("frames") or [])
+    sizes = []
+    for clone_id in req.get("cloneIds") or []:
+        d = await plugin_value(f"return await h.mreflow({json.dumps(clone_id)});", 120) or {}
+        sizes.append(f"{d.get('w', '?')}×{d.get('h', '?')}")
+    return f"Mobile 375 ready: {len(made)} groups planned, reflowed to {', '.join(sizes) or '—'}"
+
+
+PROTOCOLS = {  # job kind → request file, headless command (headless/CLAUDE.md), panel label
+    "recreate": ("mistok-design-request.json", "recreate the design", "◆ recreating"),
+    "redesign": ("mistok-redesign-request.json", "redesign the section", "⟳ redesigning"),
+    "prototype": ("mistok-prototype-request.json", "build the prototype", "▭ building prototype"),
+}
+PROTOCOL_MSGS = {"designrequest": "recreate", "redesignrequest": "redesign", "protorequest": "prototype"}
+
+
+async def run_protocol(kind: str, req: dict):
+    """A request-file protocol in a headless session (opus unless the panel picks a model),
+    tool progress streamed into the panel; the reply previews the [node:ID] it reports.
+    Runs outside the repo so only the lean headless/CLAUDE.md context applies."""
+    fname, phrase, label = PROTOCOLS[kind]
+    save_request(fname, req)
+    await status(kind, label + "…")
+    result, last = {}, 0.0
+
+    async def on_event(evt):
+        nonlocal last
+        if evt.get("type") == "result":
+            result.update(evt)
+        elif evt.get("type") == "assistant" and time.time() - last > 2:
+            for block in (evt.get("message") or {}).get("content") or []:
+                if block.get("type") == "tool_use":
+                    last = time.time()
+                    inp = block.get("input") or {}
+                    hint = str(inp.get("command") or inp.get("file_path") or inp.get("description") or "")
+                    await status(kind, f"{label}: {block.get('name', '')}" + (f" · {hint[:48]}" if hint else ""))
+                    break
+
+    workdir = TMP / "mistok-run"
+    workdir.mkdir(exist_ok=True)
+    args = ["--model", req.get("model") or "opus", *(["--effort", req["effort"]] if req.get("effort") else []),
+            "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
+            "--append-system-prompt", HEADLESS.read_text(encoding="utf-8")]
+    rc, tail = await claude(phrase, args, timeout=1800, cwd=workdir, on_event=on_event)
+    text = str(result.get("result") or "").strip()
+    if not text:
+        return f"{label}: no result ({result.get('subtype') or f'exit {rc}'}) {tail[-300:]}".strip()
+    m = re.search(r"\[node:(\d+:\d+)\]", text)
+    reply = {"text": re.sub(r"\s*\[node:\d+:\d+\]", "", text)[:400]}
+    if m:
+        reply["node"] = m.group(1)
+        img = await preview(m.group(1))
+        if img:
+            reply["img"] = img
+    return reply
+
+
+# ─── photo fill (Freepik) ───────────────────────────────────────────────────
+
+BAD_TITLE = ("3d", "render", "generative", "ai image", "miniature", "toy", "lineart",
+             "drawing", "illustration", "cartoon", "vector")
+RANK_PROMPT = (
+    "Rank stock photo candidates for a premium brand design. Judge relevance by each group's "
+    "context texts. For each group pick the best distinct photos (real photography feel, "
+    "editorial quality, no stock cliches, no visible text/watermarks), enough to cover need. "
+    'Return ONLY JSON: {"groups":[{"i":<group index>,"ids":[<candidate ids in order>]}]}. Data: '
+)
+
+
+def _freepik_key():
+    """FREEPIK_API_KEY from the environment or the repo's .env."""
+    if os.environ.get("FREEPIK_API_KEY"):
+        return os.environ["FREEPIK_API_KEY"].strip()
+    try:
+        for line in (ROOT / ".env").read_text().splitlines():
+            k, _, v = line.partition("=")
+            if k.strip() == "FREEPIK_API_KEY" and v.strip():
+                return v.strip().strip("\"'")
+    except OSError:
+        pass
+    return None
+
+
+def _shrink(data: bytes, px: int = 2048) -> bytes:
+    """Fit a photo into px (macOS sips); elsewhere it goes as is (Figma's cap is 4096)."""
+    if not shutil.which("sips"):
+        return data
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "photo.jpg"
+        p.write_bytes(data)
+        subprocess.run(["sips", "-Z", str(px), str(p)], capture_output=True, timeout=60)
+        return p.read_bytes()
+
+
+async def run_images(req: dict):
+    """✨ image slots ← Freepik stock photos: search per slot context, haiku ranks, insert.
+    Without a key the saved request waits for a Claude session («insert the images»)."""
+    save_request("mistok-image-request.json", req)
+    slots = req.get("slots") or []
+    key = _freepik_key()
+    if not key:
+        return ("Request saved to /tmp/mistok-image-request.json. One-click fill needs FREEPIK_API_KEY "
+                "in mistok/.env (free key: freepik.com/developers); or tell Claude in a session: insert the images")
+    if not slots:
+        return "no image slots in the request"
+    groups = {}
+    for s in slots:
+        sig = " | ".join(s.get("context") or [])[:120] or s.get("name") or "photo"
+        groups.setdefault(sig, []).append(s)
+    await status("imggen", f"searching photos: {len(groups)} themes / {len(slots)} slots…")
+    async with ClientSession(headers={"x-freepik-api-key": key}, timeout=ClientTimeout(total=60)) as http:
+        cands = []
+        for sig, ss in groups.items():
+            ar = ss[0]["w"] / max(ss[0]["h"], 1)
+            orient = "landscape" if ar > 1.25 else "portrait" if ar < 0.8 else "square"
+            params = {"term": sig.split("|")[0].strip()[:60] or "photo", "limit": "30", "page": "1",
+                      "filters[content_type][photo]": "1", f"filters[orientation][{orient}]": "1",
+                      "filters[ai-generated][excluded]": "1"}
+            async with http.get("https://api.freepik.com/v1/resources", params=params) as r:
+                data = await r.json(content_type=None)
+                if r.status != 200:
+                    raise RuntimeError(f"Freepik search HTTP {r.status}: {str(data)[:160]}")
+            cands.append([{"id": it.get("id"), "title": it.get("title")} for it in data.get("data") or []
+                          if not any(b in (it.get("title") or "").lower() for b in BAD_TITLE)][:15])
+        ranked = {}
+        if any(cands):
+            plan = await ask_json(RANK_PROMPT + json.dumps(
+                [{"i": i, "context": sig, "need": len(ss), "candidates": c}
+                 for i, ((sig, ss), c) in enumerate(zip(groups.items(), cands))], ensure_ascii=False),
+                model="haiku", timeout=120, kind="imggen")
+            if isinstance(plan, dict):
+                ranked = {g.get("i"): g.get("ids") for g in plan.get("groups") or [] if isinstance(g, dict)}
+        done, used = 0, set()
+        for i, ((sig, ss), c) in enumerate(zip(groups.items(), cands)):
+            queue = [x for x in (ranked.get(i) or [x["id"] for x in c]) if x not in used]
+            for slot in ss:
+                if not queue:
+                    break
+                rid = queue.pop(0)
+                used.add(rid)
+                await status("imggen", f"inserting {done + 1}/{len(slots)}…")
+                try:
+                    async with http.get(f"https://api.freepik.com/v1/resources/{rid}/download") as r:
+                        dl = await r.json(content_type=None)
+                    url = (dl.get("data") or {}).get("url") or dl.get("url")
+                    if not url:
+                        continue
+                    async with http.get(url) as r:
+                        body = await r.read()
+                    b64 = base64.b64encode(await asyncio.to_thread(_shrink, body)).decode()
+                    await plugin_value(
+                        f"const n = await figma.getNodeByIdAsync({json.dumps(slot['id'])});"
+                        "if (!n) throw new Error('slot is gone');"
+                        f"const img = figma.createImage(figma.base64Decode({json.dumps(b64)}));"
+                        "n.fills = [{type: 'IMAGE', imageHash: img.hash, scaleMode: 'FILL'}];", 60)
+                    done += 1
+                except Exception as e:
+                    print(f"[imggen] slot {slot.get('id')}: {e!r}", flush=True)
+    reply = {"text": f"inserted {done}/{len(slots)} photos ({len(groups)} themes, Freepik)"}
+    fid = (req.get("frame") or {}).get("id")
+    if fid and done:
+        img = await preview(fid)
+        if img:
+            reply["img"] = img
+    return reply
+
+
+# ─── plugin side of the bridge ──────────────────────────────────────────────
+
+def save_shot(name: str, b64: str):
+    """📷 button: PNG → ~/Desktop/mistok-shots + (macOS) the system clipboard for ⌘V."""
+    out = Path.home() / "Desktop" / "mistok-shots" / os.path.basename(name or "export.png")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(base64.b64decode(b64 or ""))
+    if sys.platform == "darwin":
+        subprocess.run(["osascript", "-e", f'set the clipboard to (read (POSIX file "{out}") as «class PNGf»)'],
+                       capture_output=True, timeout=10)
+    print(f"[file] saved {out}", flush=True)
+
+
+async def on_plugin_message(m: dict):
+    t = m.get("type")
+    if t in ("result", "error", "log"):
+        entry = PENDING.get(m.get("id"))
+        if entry and t == "log":
+            entry["logs"].append(m.get("text", ""))
+        elif entry and not entry["future"].done():
+            entry["future"].set_result(m)
+    elif t == "hello":
+        print(f"[plugin] hello v{m.get('version', '?')}", flush=True)
+        if m.get("version") != PLUGIN_VERSION:
+            await send_plugin({"type": "chatreply", "task": "chat", "text":
+                               f"The Mistok plugin running in Figma (v{m.get('version')}) is older than the "
+                               f"bridge (v{PLUGIN_VERSION}) — re-run it: Plugins → Development → Mistok (⌘⌥P)"})
+    elif t == "chat":
+        text = (m.get("text") or "").strip()
+        if re.fullmatch(r"https?://\S+", text):
+            await spawn("import", run_import, text)
+        elif text:
+            await spawn("chat", run_chat, text, m.get("model"), m.get("effort"))
+    elif t == "chatreset":
+        CHAT_SESSION.unlink(missing_ok=True)
+    elif t == "spellrequest":
+        await spawn("spell", run_spell, m.get("texts") or [])
+    elif t == "alplanrequest":
+        await spawn("autolayout", run_alplan, m.get("request") or {})
+    elif t == "mobileplanrequest":
+        await spawn("mobile", run_mobileplan, m.get("request") or {})
+    elif t in PROTOCOL_MSGS:
+        await spawn(PROTOCOL_MSGS[t], run_protocol, PROTOCOL_MSGS[t], m.get("request") or {})
+    elif t == "imgrequest":
+        await spawn("imggen", run_images, m.get("request") or {})
+    elif t == "kill":
+        running = list(TASKS)
+        for task in TASKS.values():
+            task.cancel()
+        await send_plugin({"type": "killed", "running": running})
+        print(f"[kill] {running}", flush=True)
+    elif t == "opreport":
+        # op reports → JSONL for Claude sessions («look at what Clean did»)
+        m["ts"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        with open(TMP / "mistok-ops.log", "a", encoding="utf-8") as f:
+            f.write(json.dumps(m, ensure_ascii=False) + "\n")
+        print(f"[op] {m.get('summary')}", flush=True)
+    elif t == "file":
+        await asyncio.to_thread(save_shot, m.get("name"), m.get("b64"))
 
 
 async def plugin_ws_handler(request: web.Request) -> web.WebSocketResponse:
     global PLUGIN_WS
-    ws = web.WebSocketResponse(heartbeat=20, max_msg_size=16 * 1024 * 1024)
+    ws = web.WebSocketResponse(heartbeat=20, max_msg_size=MAX_MSG)
     await ws.prepare(request)
 
     if PLUGIN_WS is not None and not PLUGIN_WS.closed:
-        print(f"[plugin] rejecting second connection from {request.remote}")
+        print(f"[plugin] rejecting second connection from {request.remote}", flush=True)
         await ws.send_str(json.dumps({"type": "error", "text": "another plugin instance already connected"}))
         await ws.close(code=1008, message=b"already connected")
         return ws
 
     PLUGIN_WS = ws
-    print(f"[plugin] connected from {request.remote}")
+    print(f"[plugin] connected from {request.remote}", flush=True)
     stats_task = asyncio.create_task(stats_pusher(ws))
-
     try:
         async for msg in ws:
             if msg.type == WSMsgType.ERROR:
-                print(f"[plugin] ws error: {ws.exception()}")
+                print(f"[plugin] ws error: {ws.exception()}", flush=True)
                 break
             if msg.type != WSMsgType.TEXT:
                 continue
-
             try:
                 m = json.loads(msg.data)
-            except json.JSONDecodeError:
-                print(f"[plugin] bad json: {msg.data[:200]!r}")
+            except ValueError:
+                print(f"[plugin] bad json: {msg.data[:200]!r}", flush=True)
                 continue
-
-            mtype = m.get("type")
-
-            if mtype == "hello":
-                print(f"[plugin] hello v{m.get('version', '?')}")
-                continue
-            if mtype == "pong":
-                continue
-            if mtype == "rmnode":
-                nid = m.get("id")
-                if nid:
-                    code = (f"const n = await figma.getNodeByIdAsync('{nid}');"
-                            "if (!n) return 'gone';"
-                            "const nm = n.name; n.remove(); figma.commitUndo();"
-                            "figma.notify('Removed: ' + nm); return nm;")
-                    try:
-                        await asyncio.to_thread(urllib_request_json,
-                            "http://127.0.0.1:8787/exec", {"code": code, "timeout": 30})
-                    except Exception as e:
-                        print(f"[rmnode] {e}", flush=True)
-                continue
-            if mtype == "kill":
-                killed = []
-                for k, pr in list(RUNNING.items()):
-                    try:
-                        pr.kill()
-                        killed.append(k)
-                    except Exception:
-                        pass
-                    RUNNING.pop(k, None)
-                for k in killed:
-                    await send_plugin({"type": "chatreply", "task": k, "text": "✕ cancelled: " + k})
-                if not killed:
-                    await send_plugin({"type": "chatreply", "task": "chat", "text": "nothing to cancel"})
-                print(f"[kill] {killed}", flush=True)
-                continue
-            if mtype == "chat":
-                text = (m.get("text") or "").strip()
-                if text.startswith(("http://", "https://")) and " " not in text:
-                    asyncio.create_task(run_import(ws, text))  # лінк = веб-імпорт
-                else:
-                    asyncio.create_task(run_chat(ws, text, m.get("model"), m.get("effort")))
-                continue
-            if mtype == "spellrequest":
-                asyncio.create_task(run_spell(ws, m.get("texts") or []))
-                continue
-            if mtype == "protorequest":
-                try:
-                    req = m.get("request") or {}
-                    req["ts"] = datetime.now().astimezone().isoformat(timespec="seconds")
-                    with open("/tmp/mistok-prototype-request.json", "w", encoding="utf-8") as f:
-                        json.dump(req, f, ensure_ascii=False, indent=1)
-                    print(f"[proto] request: {req.get('frame', {}).get('name')} → /tmp/mistok-prototype-request.json", flush=True)
-                    await ws.send_str(json.dumps({"type": "chatreply",
-                        "text": "▭ Prototype request for \"" + str(req.get('frame', {}).get('name')) + "\" is ready.\nTell Claude in a session: build the prototype"}))
-                except OSError as e:
-                    print(f"[proto] failed: {e}", flush=True)
-                continue
-            if mtype == "designrequest":
-                try:
-                    req = m.get("request") or {}
-                    req["ts"] = datetime.now().astimezone().isoformat(timespec="seconds")
-                    with open("/tmp/mistok-design-request.json", "w", encoding="utf-8") as f:
-                        json.dump(req, f, ensure_ascii=False, indent=1)
-                    print(f"[design] request: {req.get('frame', {}).get('name')} → /tmp/mistok-design-request.json", flush=True)
-                    asyncio.create_task(run_protocol("recreate the design", "◆ recreating", model=req.get("model"), effort=req.get("effort"), kind="recreate"))
-                except OSError as e:
-                    print(f"[design] failed: {e}", flush=True)
-                continue
-            if mtype == "alplanrequest":
-                asyncio.create_task(run_alplan(m.get("request") or {}))
-                continue
-            if mtype == "redesignrequest":
-                try:
-                    req = m.get("request") or {}
-                    req["ts"] = datetime.now().astimezone().isoformat(timespec="seconds")
-                    with open("/tmp/mistok-redesign-request.json", "w", encoding="utf-8") as f:
-                        json.dump(req, f, ensure_ascii=False, indent=1)
-                    print(f"[redesign] request: {req.get('frame', {}).get('name')} → /tmp/mistok-redesign-request.json", flush=True)
-                    asyncio.create_task(run_protocol("redesign the section", "⟳ redesigning", model=req.get("model"), effort=req.get("effort"), kind="redesign"))
-                except OSError as e:
-                    print(f"[redesign] failed: {e}", flush=True)
-                continue
-            if mtype == "imgrequest":
-                # запит на Magnific-генерацію — читає Claude-сесія
-                try:
-                    req = m.get("request") or {}
-                    req["ts"] = datetime.now().astimezone().isoformat(timespec="seconds")
-                    with open("/tmp/mistok-image-request.json", "w", encoding="utf-8") as f:
-                        json.dump(req, f, ensure_ascii=False, indent=1)
-                    print(f"[img] request: {len(req.get('slots') or [])} slots → /tmp/mistok-image-request.json", flush=True)
-                    asyncio.create_task(run_images(req))
-                except OSError as e:
-                    print(f"[img] request failed: {e}", flush=True)
-                continue
-            if mtype == "opreport":
-                # звіт кнопок-операцій — лог для Claude-сесій
-                try:
-                    m["ts"] = datetime.now().astimezone().isoformat(timespec="seconds")
-                    with open("/tmp/mistok-ops.log", "a", encoding="utf-8") as f:
-                        f.write(json.dumps(m, ensure_ascii=False) + "\n")
-                    print(f"[op] {m.get('summary')}", flush=True)
-                except OSError as e:
-                    print(f"[op] log failed: {e}", flush=True)
-                continue
-            if mtype == "file":
-                # plugin-side export (📷 button) — save to Desktop
-                name = os.path.basename(m.get("name") or "export.png")
-                try:
-                    data = base64.b64decode(m.get("b64") or "")
-                    shots_dir = Path.home() / "Desktop" / "mistok-shots"
-                    shots_dir.mkdir(exist_ok=True)
-                    out = shots_dir / name
-                    out.write_bytes(data)
-                    # PNG у системний буфер — щоб одразу ⌘V у чат/месенджер
-                    import subprocess
-                    subprocess.run(
-                        ["osascript", "-e",
-                         f'set the clipboard to (read (POSIX file "{out}") as «class PNGf»)'],
-                        capture_output=True, timeout=10,
-                    )
-                    print(f"[file] saved {out} ({len(data)} bytes) + clipboard", flush=True)
-                except Exception as e:
-                    print(f"[file] save failed: {e}", flush=True)
-                continue
-
-            rid = m.get("id")
-            entry = PENDING.get(rid)
-            if not entry:
-                # late reply for a request that already timed out — drop it
-                continue
-
-            if mtype == "log":
-                entry["logs"].append(m.get("text", ""))
-            elif mtype in ("result", "error"):
-                if not entry["future"].done():
-                    entry["future"].set_result(m)
+            try:
+                await on_plugin_message(m)
+            except Exception as e:  # one bad message must not drop the connection
+                print(f"[plugin] {m.get('type')} failed: {e!r}", flush=True)
     finally:
         stats_task.cancel()
         if PLUGIN_WS is ws:
             PLUGIN_WS = None
-        print("[plugin] disconnected")
-        # Fail any in-flight requests so clients don't hang
-        for rid, entry in list(PENDING.items()):
+        for entry in PENDING.values():  # in-flight execs fail now instead of timing out
             if not entry["future"].done():
-                entry["future"].set_result({
-                    "id": rid, "type": "error", "text": "plugin disconnected mid-request",
-                })
+                entry["future"].set_result({"type": "error", "text": "plugin disconnected mid-request"})
+        print("[plugin] disconnected", flush=True)
     return ws
 
 
-async def exec_handler(request: web.Request) -> web.Response:
-    if PLUGIN_WS is None or PLUGIN_WS.closed:
-        return web.json_response(
-            {"ok": False, "error": "plugin not connected — run the Mistok plugin in Figma"},
-            status=503,
-        )
+# ─── HTTP ───────────────────────────────────────────────────────────────────
 
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _browser_ok(request: web.Request) -> bool:
+    """No Origin: a local process (CLI, curl, scripts). Browsers always send one; the only
+    browser allowed is Figma's plugin iframe on /plugin (opaque "null" origin, Figma's UA) —
+    a sandboxed iframe in a regular browser has the same origin but not the UA."""
+    origin = request.headers.get("Origin")
+    return origin is None or (request.path == "/plugin" and origin == "null"
+                              and "Figma/" in request.headers.get("User-Agent", ""))
+
+
+@web.middleware
+async def local_only(request: web.Request, handler):
+    """Web pages can reach localhost too: refuse a foreign Host (DNS rebinding) and
+    any browser that isn't the Figma plugin (CSRF, drive-by WebSocket)."""
+    if request.url.host not in LOCAL_HOSTS or not _browser_ok(request):
+        print(f"[bridge] refused {request.method} {request.path} (host {request.host}, "
+              f"origin {request.headers.get('Origin')})", flush=True)
+        return web.json_response({"ok": False, "error": "forbidden: local clients only"}, status=403)
+    return await handler(request)
+
+
+async def exec_handler(request: web.Request) -> web.Response:
     try:
         body = await request.json()
-    except json.JSONDecodeError:
+        code, timeout = body.get("code"), float(body.get("timeout", 60))
+    except (ValueError, TypeError, AttributeError):
         return web.json_response({"ok": False, "error": "invalid JSON body"}, status=400)
-
-    code = body.get("code")
     if not isinstance(code, str) or not code.strip():
         return web.json_response({"ok": False, "error": "missing or empty 'code'"}, status=400)
-
-    global EXEC_COUNT
-    EXEC_COUNT += 1
-    timeout = float(body.get("timeout", 60))
-    rid = str(uuid.uuid4())
-    fut: asyncio.Future = asyncio.get_event_loop().create_future()
-    PENDING[rid] = {"future": fut, "logs": [], "t0": time.time()}
-
-    try:
-        await PLUGIN_WS.send_str(json.dumps({"id": rid, "type": "exec", "code": code}))
-    except Exception as e:
-        PENDING.pop(rid, None)
-        return web.json_response({"ok": False, "error": f"send to plugin failed: {e}"}, status=500)
-
-    try:
-        result = await asyncio.wait_for(fut, timeout=timeout)
-    except asyncio.TimeoutError:
-        PENDING.pop(rid, None)
-        return web.json_response(
-            {"ok": False, "error": f"timeout after {timeout:.0f}s"}, status=504,
-        )
-
-    entry = PENDING.pop(rid)
-    elapsed_ms = int((time.time() - entry["t0"]) * 1000)
-    EXEC_TIMES.append(elapsed_ms)
-
-    if result.get("type") == "error":
-        global EXEC_ERRORS
-        EXEC_ERRORS += 1
-        error_text = result.get("text", "unknown error")
-        return web.json_response(
-            {
-                "ok": False,
-                "error": error_text,
-                "hint": find_hint(error_text),
-                "stack": result.get("stack"),
-                "logs": entry["logs"],
-                "elapsed_ms": elapsed_ms,
-            },
-            status=500,
-        )
-
-    return web.json_response({
-        "ok": True,
-        "result": result.get("text", ""),
-        "value": result.get("value"),
-        "logs": entry["logs"],
-        "elapsed_ms": elapsed_ms,
-    })
+    res = await plugin_exec(code, timeout)
+    status_code = res.pop("status", 200)
+    return web.json_response(res, status=status_code)
 
 
 async def status_handler(_request: web.Request) -> web.Response:
-    return web.json_response({
-        "plugin_connected": PLUGIN_WS is not None and not PLUGIN_WS.closed,
-        "pending": len(PENDING),
-    })
+    return web.json_response({"plugin_connected": PLUGIN_WS is not None and not PLUGIN_WS.closed,
+                              "pending": len(PENDING)})
 
 
 async def root_handler(_request: web.Request) -> web.Response:
     return web.json_response({
         "service": "mistok-bridge",
-        "version": "2.0",
+        "version": PLUGIN_VERSION,
         "endpoints": {
             "POST /exec": "{code, timeout?} -> {ok, result, value, logs, elapsed_ms}",
             "GET /status": "{plugin_connected, pending}",
@@ -1042,7 +811,7 @@ async def root_handler(_request: web.Request) -> web.Response:
 
 
 def build_app() -> web.Application:
-    app = web.Application(client_max_size=16 * 1024 * 1024)
+    app = web.Application(client_max_size=MAX_MSG, middlewares=[local_only])
     app.router.add_get("/", root_handler)
     app.router.add_get("/status", status_handler)
     app.router.add_post("/exec", exec_handler)
@@ -1051,18 +820,15 @@ def build_app() -> web.Application:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Mistok bridge server")
-    ap.add_argument("--host", default="127.0.0.1", help="bind host (default 127.0.0.1)")
-    ap.add_argument("--port", type=int, default=8787, help="bind port (default 8787)")
-    args = ap.parse_args()
-
-    print(f"[bridge] listening on http://{args.host}:{args.port}")
-    print(f"[bridge] plugin should connect to ws://localhost:{args.port}/plugin")
-    print(f"[bridge] try: curl -X POST http://localhost:{args.port}/exec "
-          f"-H 'Content-Type: application/json' "
-          f"-d '{{\"code\":\"return figma.currentPage.name\"}}'")
-
-    web.run_app(build_app(), host=args.host, port=args.port, print=None)
+    global PORT
+    ap = argparse.ArgumentParser(description="Mistok bridge server (127.0.0.1 only)")
+    ap.add_argument("--port", type=int, default=PORT, help="port (default 8787 — the plugin connects there)")
+    PORT = ap.parse_args().port
+    sys.stdout.reconfigure(line_buffering=True)  # launchd log stays live
+    print(f"[bridge] listening on http://127.0.0.1:{PORT}")
+    print(f"[bridge] plugin should connect to ws://localhost:{PORT}/plugin")
+    # the plugin's WebSocket never "finishes": don't let a graceful shutdown wait 60 s for it
+    web.run_app(build_app(), host="127.0.0.1", port=PORT, print=None, shutdown_timeout=3)
 
 
 if __name__ == "__main__":
