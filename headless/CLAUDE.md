@@ -1,15 +1,16 @@
 # Mistok headless protocols (lean context)
 
-You drive Figma through the `mistok` CLI (on PATH). Bridge: localhost:8787, operates on the currently open file.
+You drive Figma through the `mistok` CLI (on PATH). Bridge: localhost:8787, operates on the currently open file. You run headless in a scratch folder: write temp files (shots etc.) there or in /tmp.
 
 ## CLI cheatsheet
 ```
 mistok spec <id> [--depth N]     # compact design JSON (geometry, fills as hex/var(name), typography, grids)
 mistok shot <id> out.png [--scale 2]
 mistok vars                      # all variables by collection (aliases resolved, colors hex)
+mistok styles                    # all local text styles (name, font, size, lineH) — use instead of exec
 mistok tree <id> --depth 2
 mistok img <id> file.png         # local image → IMAGE fill (auto-downscales to 4096px)
-mistok exec "<js>" | exec --file f.js   # arbitrary Plugin API JS; `await`/`return` work; helpers h.*
+mistok exec "<js>" | exec --file f.js   # arbitrary Plugin API JS; `await`/`return` work; helpers h.* (h.replaceText keeps text styles)
 ```
 
 ## exec rules (critical)
@@ -20,7 +21,16 @@ mistok exec "<js>" | exec --file f.js   # arbitrary Plugin API JS; `await`/`retu
 - Batch work into AT MOST 3 exec calls (build → bind → fix). figma.commitUndo() at the end of each.
 
 ## Strict styling (all protocols)
-ONLY this file's design system: its color variables (respect scopes: TEXT_FILL/FRAME_FILL/SHAPE_FILL/STROKE_COLOR/GAP/FONT_SIZE/LINE_HEIGHT), its text styles, its existing assets. Never invent hex or ad-hoc fonts — pick the closest existing token. Get them via `mistok vars` and `figma.getLocalTextStylesAsync()`.
+ONLY this file's design system: its color variables (respect scopes: TEXT_FILL/FRAME_FILL/SHAPE_FILL/STROKE_COLOR/GAP/FONT_SIZE/LINE_HEIGHT), its text styles, its existing assets. Never invent hex or ad-hoc fonts — pick the closest existing token. Get them via `mistok vars` and `mistok styles`.
+
+## Anti-slop rules (hard, all protocols)
+- No lorem ipsum, no invented stats/testimonials/names — every text comes from the source or is its obvious completion.
+- Icons: only from the file's existing assets, one consistent set. NEVER emoji as icons, never mixed icon styles.
+- No decorative gradients, blur blobs, glassmorphism, fake 3D — unless the file already uses them.
+- Shadows and corner radii only in values the file already uses somewhere.
+- ONE accent color from the file tokens; neutrals carry everything else.
+- Typography: ≤3 hierarchy levels per section; body line length ≤ ~70ch; no center-aligned paragraphs of body text.
+- Spacing rhythm from the file's spacing tokens (or consistent multiples); no random 13/17/23px values.
 
 ## Placement (all protocols)
 Result ALWAYS next to the source: same parent/page, x = source.x + source.width + 100, y = source.y. Fetch source coords/parent via mistok exec by the id from the request file.
@@ -31,7 +41,7 @@ Result ALWAYS next to the source: same parent/page, x = source.x + source.width 
 Source is a screenshot. `mistok shot` it (scale 1–2), read carefully. Rebuild 1:1 editable layers: exact positions/sizes; colors ONLY file variables (closest, scoped); typography ONLY file text styles; real TEXT nodes; image areas as placeholders. Then shot the result, compare side-by-side, fix visible deltas once.
 
 ### redesign the section → /tmp/mistok-redesign-request.json
-Works for any selection (bitmap source: shot + read visually first). Find 2–3 awwwards-grade references similar in meaning (use knowledge; browsing optional via ~/Code/mistok/venv playwright). Redraw next to the original: composition/spacing/scale from the REFERENCE by eye (never copy source paddings); styling strictly from the file. Bold, crafted, no AI slop. Then shot the result and fix weak spots once.
+Works for any selection (bitmap source: shot + read visually first). Find 2–3 awwwards-grade references similar in meaning (use knowledge; browsing optional: `python3` on PATH is the mistok venv, with Playwright if it was installed via `install.sh --with-import`). Redraw next to the original: composition/spacing/scale from the REFERENCE by eye (never copy source paddings); styling strictly from the file. Bold, crafted, no AI slop. Then shot the result and fix weak spots once.
 
 ### build the prototype → /tmp/mistok-prototype-request.json
 Modern minimalist prototype: Inter (Regular/Medium/"Semi Bold"), black/white/gray (#111/#6B6B6B/#F0F0F0/#E5E5E5), full auto-layout, ALL texts and logic of the source (bitmap → shot + read visually).
@@ -42,6 +52,9 @@ Modern minimalist prototype: Inter (Regular/Medium/"Semi Bold"), black/white/gra
 - Composition: commit to ONE distinctive idea from the reference (oversized display type, split layout, editorial numbered rows, dramatic imagery). A plain stack of text blocks is a failure.
 - Hierarchy: exactly one dominant element; spacing rhythm consistent (multiples of the file's spacing tokens).
 - Self-check round: shot the result, walk this list, fix what fails — then finish.
+
+## Review agent (before finishing)
+Shot the final result to a PNG. Spawn ONE review subagent (Task tool, general-purpose) whose prompt includes: the source PNG path, the result PNG path, and the full Quality bar + Anti-slop lists above. Ask it to Read both images and return a numbered list of CONCRETE failures only (element, what's wrong, expected) — or "PASS". Fix every listed failure, re-shot once. One review round max — do not loop.
 
 ## Finish
 Delete the request file. Reply with ONE line: what was built, frame name, key counts, and END the line with the result frame id in the exact form [node:<id>] (e.g. [node:123:456]). No process narration.

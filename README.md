@@ -1,314 +1,188 @@
 # Mistok
 
-Drive Figma from your terminal / Claude Code / any HTTP client. A tiny custom plugin sits inside Figma Desktop and holds a WebSocket to a local Python server — you send Figma Plugin API code over HTTP and get the result back.
+Drive Figma from your terminal, Claude Code or any HTTP client. A small plugin runs inside Figma Desktop and holds a WebSocket to a local Python bridge: you send Figma Plugin API code over HTTP and get the result back. The plugin panel adds one-click design-system ops and a Claude chat that can work on the open file.
 
-> Mistok («місток» — little bridge) is Dmytro Zharko's fork of [Figmosha 2.0](https://github.com/denysosadchyi/figmosha2) by Denys Osadchyi (MIT).
-
-No Playwright. No browser automation. No clipboard hacks. No screenshots.
-
-Measured **150–950× faster** than browser-driven approaches: reads ~5 ms, mutations ~30 ms, library component import ~150 ms.
-
-## Why this exists
-
-The Figma Plugin API is the most stable and powerful interface Figma offers. Thousands of plugins depend on it. But typically it's only accessible *inside* Figma's UI — you click "Run plugin", code executes, results appear in a panel.
-
-Mistok keeps a plugin permanently open in Figma and exposes its Plugin API through a local network socket. You write code in your editor / Claude / a script, it runs inside Figma, and the result comes back to you.
+> Mistok («місток», little bridge) is Dmytro Zharko's fork of [Figmosha 2.0](https://github.com/denysosadchyi/figmosha2) by Denys Osadchyi (MIT).
 
 ```
-PowerShell / curl / Claude Code     bridge.py (Python)         Figma Desktop
-───────────────────────────         ─────────────────          ─────────────
-                                                               ┌────────────┐
-   POST /exec  ──────────────►   HTTP server                   │ open file  │
-                                    │                          │            │
-                                    ▼                          │ ┌────────┐ │
-                                 WS server  ──ws://localhost── ┤ │Mistok│ │
-                                                               │ │ Bridge │ │
-                                    ▲                          │ │(plugin)│ │
-                                    │                          │ └───┬────┘ │
-   ◄──── HTTP response                                         │     │      │
-        {ok, result, value, logs, elapsed_ms, hint?}            │     ▼      │
-                                                               │ Plugin API │
-                                                               └────────────┘
+mistok CLI / curl / Claude Code        bridge.py (Python)            Figma Desktop
+───────────────────────────────        ──────────────────            ─────────────
+   POST /exec {code} ─────────────►   HTTP :8787 ──── WS /plugin ──► Mistok plugin
+   ◄──── {ok, result, value, logs}                                   └─ Plugin API
 ```
 
-## Highlights
-
-- **One Python file** server + **one Python file** CLI. No npm. No frameworks.
-- **Custom Figma plugin** (JS + HTML). Imported in dev mode — no publishing.
-- **17 helpers** baked into the plugin runtime as `h.*` so scripts stay short and safe (`h.bF`, `h.setText`, `h.withFonts`, `h.spec`, `h.varsDump`, `h.variantsOf`, …).
-- **11 high-level CLI subcommands** for common ops (`tree`, `find`, `text`, `variant`, `clone`, `rm`, `icomp`, `shot`, `spec`, `vars`, `sel`).
-- **Plugin panel with live telemetry**: selection row (⧉ copy id, 📷 PNG @2x → `~/Desktop/mistok-shots/` + system clipboard), Claude subscription limit bars, today's usage stats, color-coded log with mutation highlighting.
-- **Smart error hints** in responses — when a script fails with a known-pattern error, the response includes a `hint` field telling you how to fix it.
-- **Works while Figma is minimized.** WebSocket stays alive; JavaScript keeps executing in the background.
-- **Auto-reconnect** in the plugin UI — restart the server, plugin reconnects within 2 s.
+No browser automation, no clipboard hacks: reads take ~5 ms, mutations ~30 ms, importing a library component ~150 ms.
 
 ## Requirements
 
-- **Figma Desktop** (Stable or Beta) — [download](https://www.figma.com/downloads/). The browser version cannot import local development plugins.
-- **Python 3.10+** — for the bridge server and CLI client. Stdlib + a single dependency (`aiohttp`).
-- **OS**: macOS, Windows (native or WSL2), or Linux.
+- **Figma Desktop.** The browser version can't run development plugins.
+- **macOS** gets the full setup: the bridge auto-starts via launchd. On Linux the bridge and CLI work, but you start the bridge yourself.
+- **Python 3.10+** (`brew install python`). The only dependency is `aiohttp`.
+- **[Claude Code](https://claude.com/claude-code)**, logged in. Needed for the panel chat and the Claude-powered buttons; the bridge, the CLI and the other buttons work without it.
+- Optional: a free [Freepik API key](https://www.freepik.com/developers) for one-click stock photos, and Playwright for web import (see below).
 
 ## Install
 
-### 1. Clone the repo
+The repository is private: you need collaborator access on GitHub, then:
 
 ```bash
-# Mistok lives locally (fork of figmosha2; upstream lacks the Mistok additions).
-# If you've pushed your own remote, clone that; the original base is:
-git clone https://github.com/denysosadchyi/figmosha2.git mistok
-cd mistok
+git clone https://github.com/zharkodv-cmd/mistok.git ~/Code/mistok   # any folder works
+cd ~/Code/mistok
+./install.sh
 ```
 
-### 2. Set up Python
+The installer is safe to re-run. It:
 
-**macOS / Linux:**
+- creates `venv/` and installs the dependencies;
+- puts a `mistok` command on your PATH;
+- on macOS, registers the bridge as a launchd agent (`com.mistok.bridge`), so it starts at login and restarts if it crashes;
+- tells you whether it found Claude Code.
+
+Then, in Figma Desktop:
+
+1. **Plugins → Development → Import plugin from manifest…** and pick `plugin/manifest.json`. You only do this once.
+2. **Plugins → Development → Mistok** starts the plugin. **⌘⌥P** re-runs the last plugin.
+
+To check it works:
 
 ```bash
-python3 -m venv venv
-./venv/bin/pip install aiohttp
+mistok status                              # {"plugin_connected": true, "pending": 0}
+mistok "return figma.currentPage.name"     # the open page's name
 ```
 
-**Windows (native PowerShell):**
+**Optional extras**
 
-```powershell
-python -m venv venv
-.\venv\Scripts\pip install aiohttp
-```
+- `./install.sh --with-import` adds Playwright and Chromium for web import: paste a URL into the panel chat and the page arrives as editable layers.
+- Add `FREEPIK_API_KEY=…` to `.env` in the repo for one-click photo fill (✨ Photos).
 
-**Windows + WSL2** (recommended if you already use WSL): same as macOS/Linux inside WSL. WSL2 auto-forwards `localhost` ports to the Windows host, so Figma Desktop (running on Windows native) can reach the bridge running inside WSL transparently.
+**Update:** `git pull && ./install.sh`, then re-run the plugin in Figma. The panel tells you when the running plugin is older than the bridge.
+**Uninstall:** `./install.sh --uninstall`, then remove the plugin in Figma (Plugins → Development → Manage plugins).
 
-### 3. Import the plugin into Figma
-
-1. Open **Figma Desktop**
-2. Open any file (or create a new one)
-3. Top menu → **Plugins** → **Development** → **Import plugin from manifest…**
-4. Select `plugin/manifest.json` from this repo
-
-Figma registers "Mistok" under `Plugins → Development`. You only do this once.
-
-**WSL2 note**: if your repo lives in WSL but Figma runs on Windows native, copy `plugin/` to a Windows-accessible path first:
+## CLI
 
 ```bash
-mkdir -p /mnt/c/Users/$WIN_USER/mistok-plugin
-cp plugin/* /mnt/c/Users/$WIN_USER/mistok-plugin/
+mistok "return figma.currentPage.children.length"   # shorthand for exec
+mistok exec --file script.js                        # or --stdin
+mistok tree 1:23 --depth 2          # subtree as indented text
+mistok find 1:23 name~Button        # name=X, name~X, type=X, text=X, text~X
+mistok text 1:25 "New copy"         # set text; loads fonts, keeps per-range styles
+mistok variant 1:30 "Size=Large"    # switch instance variant
+mistok clone 1:23 --right --gap 100
+mistok rm 1:99
+mistok icomp <component-key>        # import a library component, place it, zoom to it
+mistok shot 1:23 hero.png --scale 2 # PNG to a file; base64 never reaches your terminal
+mistok spec 1:23 --depth 3          # compact design JSON: geometry, auto-layout, var(name) fills, type
+mistok vars                         # local variables by collection (aliases as →name)
+mistok styles                       # local text styles
+mistok focus 1:23                   # scroll the viewport to a node and select it
+mistok sel                          # the current selection
+mistok img 1:40 photo.jpg           # image fill from a local file (downscaled to Figma's 4096 px)
+mistok import https://example.com   # web page → layers (needs --with-import)
 ```
 
-Then import `C:\Users\<your-name>\mistok-plugin\manifest.json` in Figma.
-
-### 4. Start the bridge
-
-**macOS (recommended)** — launchd agent, auto-starts at login and restarts on crash:
+`spec`, `vars`, `styles` and `sel` print compact single-line JSON, which keeps token counts low for AI agents. You can also skip the CLI and use plain HTTP:
 
 ```bash
-# create ~/Library/LaunchAgents/com.mistok.bridge.plist pointing at venv/bin/python bridge.py, then:
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mistok.bridge.plist
-curl -s localhost:8787/status                              # health check
-launchctl kickstart -k gui/$(id -u)/com.mistok.bridge      # force-restart
+curl -s localhost:8787/exec -H 'Content-Type: application/json' -d '{"code":"return 1+1"}'
 ```
 
-**Linux / WSL** — tmux fallback:
-
-```bash
-bash start-bridge.sh          # detached tmux session "mistok-bridge"
-# OR: just run it in a terminal you keep open
-./venv/bin/python bridge.py
-```
-
-**Windows native** (no tmux):
-
-```powershell
-.\venv\Scripts\python bridge.py
-```
-
-The server listens on `127.0.0.1:8787`. Output:
-
-```
-[bridge] listening on http://127.0.0.1:8787
-[bridge] plugin should connect to ws://localhost:8787/plugin
-```
-
-### 5. Run the plugin in Figma
-
-In Figma Desktop: **Plugins** → **Development** → **Mistok** → **Run**.
-
-A small window appears: **bridge: connected** (green). In the server terminal you'll see `[plugin] connected from 127.0.0.1`. You're live.
-
-### 6. Smoke test
-
-In a second terminal:
-
-```bash
-./venv/bin/python mistok status
-# → {"plugin_connected": true, "pending": 0}
-
-./venv/bin/python mistok "return figma.currentPage.name"
-# → "Page 1"
-
-./venv/bin/python mistok "const r = figma.createRectangle(); r.x = 100; r.y = 100; r.resize(200, 100); r.name = 'smoketest'; return r.id"
-# → "1:23"  (and a rectangle appears in Figma)
-```
-
-If all three work — you're done.
-
-## Daily use
-
-### Start a session
-
-```bash
-# macOS: nothing to start — launchd keeps the bridge alive (survives reboot).
-# Linux/WSL: bash start-bridge.sh
-# In Figma: Plugins → Development → Mistok → Run (fastest re-run: ⌘⌥P)
-```
-
-On macOS the launchd agent survives OS reboot. The tmux fallback survives SSH disconnects but **not** reboot/WSL shutdown — restart it after either.
-
-### Send code
-
-```bash
-# Inline JS
-python mistok "return figma.currentPage.children.length"
-
-# From a file
-python mistok exec --file my-script.js
-
-# From stdin
-cat my-script.js | python mistok exec --stdin
-
-# Plain HTTP (no Python needed)
-curl -s http://localhost:8787/exec \
-  -H 'Content-Type: application/json' \
-  -d '{"code":"return 1+1"}'
-```
-
-### High-level CLI commands
-
-When the operation fits one of these, use the dedicated subcommand — much less typing and less risk of escape bugs:
-
-```bash
-python mistok tree 1:23 --depth 2          # dump subtree
-python mistok find 1:23 name=Button         # find by exact name
-python mistok find 1:23 name~Btn            # substring name match
-python mistok find 1:23 type=INSTANCE       # filter by type
-python mistok find 1:23 text~hello          # find TEXT containing "hello"
-python mistok text 1:25 "new content"       # set TEXT chars (autoloads fonts)
-python mistok variant 1:30 "Property 1=Default"
-python mistok clone 1:23 --right --gap 100  # clone adjacent
-python mistok rm 1:99                       # delete a node
-python mistok icomp <component-key>         # import library component, place + zoom
-python mistok shot 1:23 hero.png --scale 2  # export node as PNG to a local file
-python mistok spec 1:23 --depth 3           # compact design spec: geometry, auto-layout,
-                                                 #   fills/strokes as hex or var(name), typography
-python mistok vars                          # all local variables by collection (aliases as →name)
-python mistok sel                           # current selection in Figma (ids, names, sizes)
-python mistok status                        # bridge + plugin connection state
-```
-
-`spec`, `vars`, and `sel` print **compact single-line JSON** — designed for AI agents that pay per token. `shot` decodes the PNG locally, so no base64 ever hits your terminal.
-
-## Code conventions
-
-The plugin wraps your code as:
+### How code runs
 
 ```js
 new Function("figma", "print", "h", `return (async () => { <YOUR CODE> })();`)(figma, print, HELPERS)
 ```
 
-- `await` works everywhere. Body is wrapped in an async IIFE.
-- Whatever you `return` becomes the HTTP response's `result` (string) and `value` (raw JSON-serializable form).
-- `print(...)` collects lines into the `logs` array — also streamed to the plugin UI for live debugging.
+- `await` works everywhere, and whatever you `return` comes back as `result` (text) and `value` (JSON).
+- `print(...)` lines come back in `logs`.
+- Every exec is one undo step in Figma.
+- When an error matches a known pattern, the response adds a `hint` with the fix (frozen `fills`, unloaded fonts, missing manifest permission, variant typos, …).
 
-### Helpers (available as `h.*` in every exec)
+### Helpers (`h.*` in every exec)
 
 | Helper | Use |
 |---|---|
-| `await h.bF(node, idx, varOrId)` | Bind fill paint at `idx` to variable (handles frozen-array dance) |
-| `await h.bS(node, idx, varOrId)` | Bind stroke paint to variable |
-| `await h.bN(node, prop, varOrId)` | Bind numeric prop (radius, padding, size, itemSpacing, …) |
-| `h.findByName(root, name)` | First descendant with exact name |
-| `h.findAllByName(root, name)` | All descendants with exact name |
-| `h.dumpTree(node, {maxDepth, showSize, showText})` | Indented tree string |
-| `await h.withFonts(root, asyncFn)` | Auto-loads every unique font in the subtree, then runs your callback |
-| `await h.setText(node, text)` | Sets `node.characters` with auto font load (single-font nodes only) |
-| `h.cloneNext(node, {direction, gap, name})` | Clone + place adjacent (`right`/`left`/`up`/`down`) |
-| `await h.variant(instance, props)` | Wrapper around `instance.setProperties(...)` |
-| `await h.variantsOf(instance)` | `{current, groups, all}` of the component set |
-| `await h.node(id)` | Shorthand for `figma.getNodeByIdAsync(id)` |
-| `await h.var_(idOrKey)` | Resolve variable from id or instance |
-| `await h.importComp(key)` | `figma.importComponentByKeyAsync(key)` |
-| `await h.importVar(key)` | `figma.variables.importVariableByKeyAsync(key)` |
-| `await h.spec(node, {maxDepth})` | Compact design spec of subtree — geometry, layout, fills as hex/`var(name)`, typography |
-| `await h.varsDump()` | All local variables grouped by collection, aliases resolved to `→name` |
+| `await h.bF(node, idx, varOrId)` / `h.bS(…)` | Bind a fill / stroke paint to a variable |
+| `await h.bN(node, prop, varOrId)` | Bind a numeric prop (radius, padding, gap, size…) |
+| `h.findByName(root, name)` / `h.findAllByName(root, name)` | Find descendants by exact name |
+| `h.dumpTree(node, {maxDepth, showSize, showText})` | Indented tree text |
+| `await h.withFonts(root, fn)` | Load every font in a subtree, then run `fn` |
+| `await h.setText(node, text)` | Set a single-font text with its font loaded |
+| `await h.replaceText(node, text)` | Change a text by rewriting only the differing span; mixed fonts and per-range styles survive |
+| `h.cloneNext(node, {direction, gap, name})` | Clone and place next to the original |
+| `await h.variant(inst, props)` / `h.variantsOf(inst)` | Set variant props / list the set's variants |
+| `await h.spec(node, {maxDepth})` | The compact design spec behind `mistok spec` |
+| `await h.varsDump()` / `h.stylesDump()` | Variables / text styles, as `mistok vars` / `styles` |
+| `await h.op(kind, ids?, params?)` | Run a panel op (`lint`, `contrast`, `clean`, `varscolor`, `grid`…) from a script |
+| `await h.node(id)`, `h.var_(id)`, `h.importComp(key)`, `h.importVar(key)` | Async shortcuts |
 
-Compared to inlined boilerplate, helpers reduce a typical script by ~60–70% and avoid common gotchas (frozen `node.fills`, missing `loadFontAsync`, deprecated sync `getVariableById`).
+## The plugin panel
 
-### Error hints
+From top to bottom:
 
-When a script fails with a recognized pattern, the response includes a `hint` field. The CLI prints it for you:
+- Claude plan limits: session, weekly and per-model bars, each with its reset time; you get a Figma notice past 80%.
+- The selected node's id, with buttons to copy it, copy an "implement this design" prompt, and take a PNG @2x shot (saved to `~/Desktop/mistok-shots/` and put on the clipboard).
+- The op buttons below. Every op is one ⌘Z; its report goes to `/tmp/mistok-ops.log`.
 
-```
-$ mistok "node.characters = 'x'"
-mistok: Cannot write to node with unloaded font "Inter Regular"...
-   hint: use h.setText(node, text) or h.withFonts(root, fn) — they autoload fonts
-```
+| Button | What it does |
+|---|---|
+| Clean | Groups nearby layers into named folders, names default layers by content (bg / image / item / icon…), ungroups default groups, rounds to whole px. Instance internals and auto-layout sizing stay intact. |
+| Spacing | Auto-layout gaps and paddings → nearest spacing variable |
+| Colors | Solid fills/strokes and font size / line height → nearest variable, respecting variable scopes. Hidden (unscoped) primitives are never bound. |
+| Styles | Text layers → matching local text styles |
+| Layout | Free-placed layers → auto-layout. Claude plans the structure; gaps and paddings are measured from the real geometry. |
+| Mobile | A 375 px mobile clone next to the frame, with reflowed auto-layouts, tighter paddings and smaller type |
+| Section | Wraps the selection in a Section and lays it out (pad / gap / cols) |
+| Grid | Snaps children to the frame's column grid (x and width) |
+| Reuse | Fills image slots with the most relevant images already in the file |
+| Photos | Fills image slots with stock photos: Freepik search plus Claude ranking. Without a key it saves a request for a Claude session. |
+| Spell | Claude proofreads every text and applies the fixes, keeping styles and skipping texts you've edited since |
+| Redesign / Prototype / Design | Claude rebuilds the selection next to the original: a redesign after awwwards references, a minimal b/w prototype, or a 1:1 editable recreation of a screenshot, styled with the file's own variables and text styles. It streams progress and shows a preview with a *remove result* button. |
+| Lint / Contrast | Read-only audits (design-system drift, WCAG AA). The report lands next to the selection. |
 
-Currently hints cover: fills/strokes variable binding, frozen arrays, missing manifest permissions, unloaded fonts, appendChild order, invalid variant values, and a few more.
+- **Chat** with Claude Code about the open file. Its conversation carries over between messages; `/new` starts a fresh one. A URL on its own imports that web page. ✦ / ↯ pick the model and effort for the chat and the Claude buttons.
+- **✕** cancels running background work, **↶** undoes, **–** collapses the panel to a pill.
 
-## Limits / gotchas
+## Using it from Claude Code
 
-- Plugin is bound to the **currently open Figma file**. Switching files closes the plugin — re-Run it in the new file.
-- Only **one plugin instance** connects to the server at a time. Opening the plugin in a second Figma window is rejected.
-- **Figma sync errors** ("Unable to establish connection to Figma after 10 seconds") sometimes appear when fetching nodes from non-current pages. If you need cross-page access: `await figma.loadAllPagesAsync()` first.
-- Bridge binds to `127.0.0.1` by default. For LAN access: `python bridge.py --host 0.0.0.0` (not recommended — anyone on your LAN can then run arbitrary code in your Figma).
-- Manifest changes (new permissions, etc.) require **re-importing** the plugin in Figma. `code.js` and `ui.html` changes are picked up on next Run.
+To route a project's Figma work through Mistok instead of the Figma MCP, copy `rule-template.md` into the project as `.claude/rules/mistok.md`. Per-file design notes can live in `projects/<figma-file-name>.md` in this repo; that folder is git-ignored, so the notes stay local.
+
+## Security
+
+- The bridge listens on `127.0.0.1` only. It refuses requests carrying a browser `Origin` or a foreign `Host`, so a web page can't drive it.
+- `/exec` runs any JS you send in the open Figma file. Anything that can reach localhost:8787 from your machine has that power.
+- The chat and the Redesign / Prototype / Design buttons run Claude Code with `--dangerously-skip-permissions`, so it can use the `mistok` CLI unattended. Use them on files you trust: text inside a design becomes part of the prompt. Spell, Layout and photo ranking run Claude with no tools at all.
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| `connection refused` from CLI | Server not running | macOS: `launchctl kickstart -k gui/$(id -u)/com.mistok.bridge`; other OS: `bash start-bridge.sh` |
-| `plugin not connected` (503) | Plugin window closed | Plugins → Development → Mistok → Run |
-| Plugin says `disconnected, retrying…` | Server is down or restarting | Start it; plugin auto-reconnects within 2 s |
-| 504 timeout | Code threw silently or `await` never resolved | Close the plugin (X), Run again. Increase `--timeout` for legitimately long ops |
-| `permission not specified in manifest` | API needs a permission not declared in `manifest.json` | Add to `permissions` array, sync to Windows path if applicable, **re-import** plugin |
-| `Cannot write to node with unloaded font` | Need to load fonts first | Use `await h.setText(...)` or wrap edits in `h.withFonts(root, fn)` |
-| `Cannot assign to read only property` | `node.fills` is frozen | Use `await h.bF(node, idx, varId)` or copy: `JSON.parse(JSON.stringify(node.fills))` |
-| `pip install aiohttp` fails on Linux | Python externally-managed environment (PEP 668) | Use the venv approach (always preferred) or `pip install --user --break-system-packages aiohttp` |
-| Tmux not installed (Windows native) | `start-bridge.sh` won't work | Run `python bridge.py` in a regular terminal instead |
+| Symptom | Fix |
+|---|---|
+| `connection refused` | Start the bridge. On macOS: `launchctl kickstart -k gui/$(id -u)/com.mistok.bridge`, or re-run `./install.sh`. Elsewhere: `./start-bridge.sh`. |
+| `plugin not connected` (503) | Run the plugin in Figma (⌘⌥P). It's bound to the open file, so re-run it after switching files. |
+| Panel shows `retrying…` | The bridge is down or restarting. The plugin reconnects within 2 s. |
+| 504 timeout | The code never resolved. Close and re-run the plugin; pass `--timeout` for legitimately long ops. |
+| `claude CLI not found` in the panel | Install Claude Code, then re-run `./install.sh` so launchd learns where it is. |
+| `permission not specified in manifest` | Add the permission to `plugin/manifest.json` and re-import the plugin. |
+| Figma "Unable to establish connection…" on other pages | `await figma.loadAllPagesAsync()` first. |
 
-## Project layout
+Bridge log: `/tmp/mistok-bridge.log`. Self-test (a fake plugin and a fake Claude drive the real bridge): `./venv/bin/python tests/test_bridge.py`.
+
+## Layout
 
 ```
-bridge.py              HTTP/WS server + Claude usage/limits telemetry + shot file-save
-mistok                 CLI client (13 subcommands)
-start-bridge.sh        tmux fallback runner (macOS uses launchd: com.mistok.bridge)
-rule-template.md       Template rule for wiring Mistok into a Claude Code project
-plugin/
-  manifest.json        Permissions + allowed origins
-  code.js              Plugin sandbox: exec + 17 h.* helpers + selection/export
-  ui.html              WS client, selection row (⧉/📷), limit bars, stats, colored log
-projects/              Per-project design conventions (<name>.md)
-archive/               Retired one-off scripts and data snapshots
-CLAUDE.md              Conventions for Claude Code sessions driving Mistok
-README.md              This file
+bridge.py          HTTP/WS bridge + panel jobs (headless Claude, Freepik, web import) + limit bars
+mistok             CLI client
+webimport.py       web page → Figma layers (Playwright)
+install.sh         install / update / uninstall (launchd on macOS)
+start-bridge.sh    tmux runner for Linux
+plugin/            manifest.json, code.js (sandbox: exec, h.* helpers, ops), ui.html (panel)
+headless/CLAUDE.md lean context for the Redesign / Prototype / Design sessions
+rule-template.md   drop-in .claude/rules/mistok.md for your projects
+tests/             bridge self-test
+CLAUDE.md          instructions for Claude sessions in this repo (the panel chat runs here)
 ```
 
-### Plugin panel
-
-The plugin window shows, top to bottom: Claude subscription limit bars (session / weekly, red as you approach the cap, `figma.notify` warning past 80%), the current selection (node id with **⧉** copy and **📷** export — PNG @2x saved to `~/Desktop/mistok-shots/` *and* placed on the system clipboard for instant ⌘V), one-click **selection ops** (Lint & Contrast read-only audits; 🧹 Clean — snap to pixel grid + bind auto-layout values to nearest variables; ✏️ Rename — content-based names for default `Frame N` + ungroup default `Group N`; ⇥ AL — gaps/paddings → nearest FLOAT variables; 🎨 Colors — solid fills/strokes + text fontSize/lineHeight → nearest variables), today's Claude usage (session duration, project, messages, tokens — pushed by the bridge every 60 s from `~/.claude` transcripts), and a color-coded log where write-looking code is tagged `[exec✎]`. Op reports are appended to `/tmp/mistok-ops.log` (JSONL) so an AI session can review exactly what changed; every op is one ⌘Z to undo. The `–` button collapses everything to a tiny status pill.
-
-## Contributing / extending
-
-The plugin runtime is just `new Function("figma", "print", "h", body)`. Add helpers to `HELPERS` in `plugin/code.js`, sync the file to your plugin path, and they're available in your next `exec`.
-
-To add a new CLI subcommand:
-1. Add a `cmd_<name>(args)` function in `mistok` that builds JS via `json.dumps`-escaped templates
-2. Add a subparser in `build_parser()`
-3. Register in the `dispatch` map
-
-To add an error hint:
-1. Append a `(needle, hint)` tuple to `ERROR_HINTS` in `bridge.py`
-2. Restart the bridge
+Adding a CLI command means a `cmd_<name>` in `mistok` plus its subparser and a `dispatch` entry. Add helpers to `HELPERS` in `plugin/code.js` (the plugin picks them up on its next run), and error hints to `ERROR_HINTS` in `bridge.py`.
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
