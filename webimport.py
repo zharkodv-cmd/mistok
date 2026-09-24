@@ -2,7 +2,10 @@
 """webimport — turn a live web page into editable Figma layers via the Mistok bridge.
 
 Usage (run with the mistok venv python — playwright lives there):
-    ./venv/bin/python webimport.py <url> [--width 1440] [--max-nodes 600]
+    ./venv/bin/python webimport.py <url> [--width 1440] [--max-nodes 600] [--port 8787]
+
+Needs: ./venv/bin/pip install playwright && ./venv/bin/playwright install chromium
+(or ./install.sh --with-import).
 
 Pipeline: Playwright opens the page → DOM walk captures visible boxes with computed
 styles (bg, border, radius, text, images) → one exec script builds absolutely
@@ -15,8 +18,6 @@ import base64
 import json
 import sys
 import urllib.request
-
-BRIDGE = "http://localhost:8787/exec"
 
 EXTRACT_JS = r"""
 () => {
@@ -96,9 +97,13 @@ def main():
     ap.add_argument("url")
     ap.add_argument("--width", type=int, default=1440)
     ap.add_argument("--max-nodes", type=int, default=600)
+    ap.add_argument("--port", type=int, default=8787, help="bridge port")
     args = ap.parse_args()
 
-    from playwright.sync_api import sync_playwright
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        sys.exit("[import] web import needs Playwright: ./install.sh --with-import")
 
     print(f"[import] opening {args.url}", flush=True)
     with sync_playwright() as p:
@@ -197,7 +202,7 @@ return { frame: root.id, layers: made, title: D.page.title };
     # rgbv/alp мають бути оголошені до використання — function declarations hoisted, ок
 
     req = urllib.request.Request(
-        BRIDGE, data=json.dumps({"code": build, "timeout": 120}).encode(),
+        f"http://localhost:{args.port}/exec", data=json.dumps({"code": build, "timeout": 120}).encode(),
         headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=130) as r:
         resp = json.loads(r.read())
@@ -206,7 +211,9 @@ return { frame: root.id, layers: made, title: D.page.title };
         if resp.get("hint"):
             print(f"   hint: {resp['hint']}", file=sys.stderr)
         sys.exit(1)
-    print(f"[import] done: {resp.get('result')}", flush=True)
+    v = resp.get("value") or {}
+    # one line: the bridge relays the last line of output into the panel chat
+    print(f"[import] done: {v.get('layers')} layers → frame {v.get('frame')} «{v.get('title') or ''}»", flush=True)
 
 
 if __name__ == "__main__":

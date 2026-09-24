@@ -7,8 +7,8 @@ Commands:
     mistok exec --stdin
     mistok status                   # check server / plugin connection
     mistok tree <id> [--depth N]    # dump node subtree
-    mistok find <id> <filter>       # find descendants (name=X, name~X, type=X, text=X)
-    mistok text <id> "<new text>"   # set TEXT node characters (autoloads font)
+    mistok find <id> <filter>       # find descendants (name=X, name~X, type=X, text=X, text~X)
+    mistok text <id> "<new text>"   # set TEXT content (autoloads fonts, keeps per-range styles)
     mistok variant <id> "P=V" ...   # set INSTANCE variant property values
     mistok clone <id> [--right|--left|--up|--down] [--gap N] [--name N]
     mistok rm <id>                  # remove node
@@ -16,6 +16,8 @@ Commands:
     mistok shot <id> out.png [--scale 2]   # export node as PNG to local file
     mistok spec <id> [--depth N]    # compact design spec (geometry, fills, typography)
     mistok vars                     # dump local variables by collection
+    mistok styles                   # dump local text styles (font, size, lineH)
+    mistok focus <id>               # scroll viewport to node + select it
     mistok sel                      # current selection in Figma (ids, names, sizes)
     mistok img <id> file.png        # set IMAGE fill on a node from a local file
     mistok import <url>             # web page -> editable Figma layers (Playwright)
@@ -25,16 +27,17 @@ Helpers available inside exec'd code (as `h.*`):
     h.bF(node, idx, varOrId)    h.bS(node, idx, varOrId)   h.bN(node, prop, varOrId)
     h.findByName(root, name)    h.findAllByName(root, name)
     h.dumpTree(node, {maxDepth, showSize, showText})
-    h.withFonts(root, asyncFn)  h.setText(node, text)
+    h.withFonts(root, asyncFn)  h.setText(node, text)  h.replaceText(node, text)
     h.cloneNext(node, {direction, gap, name})
     h.variant(instance, props)  h.variantsOf(instance)
     h.node(id)                  h.var_(id)
     h.importComp(key)           h.importVar(key)
-    h.spec(node, {maxDepth})    h.varsDump()
+    h.spec(node, {maxDepth})    h.varsDump()           h.stylesDump()
 """
 
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -46,7 +49,7 @@ PORT = 8787
 KNOWN_CMDS = {
     "exec", "status", "tree", "find", "text", "variant",
     "clone", "rm", "import-component", "icomp",
-    "shot", "spec", "vars", "sel", "img", "import",
+    "shot", "spec", "vars", "sel", "img", "import", "styles", "focus",
 }
 
 
@@ -71,7 +74,8 @@ def _request(method, path, payload=None, timeout=65):
 
 
 def _exec(code, timeout=60):
-    return _request("POST", "/exec", {"code": code, "timeout": timeout})
+    # the HTTP wait outlives the bridge-side timeout, so a slow exec reports the real error
+    return _request("POST", "/exec", {"code": code, "timeout": timeout}, timeout=timeout + 5)
 
 
 def _emit(resp, raw=False):
@@ -135,10 +139,13 @@ def cmd_tree(args):
 def cmd_find(args):
     if "=" not in args.filter and "~" not in args.filter:
         print("mistok: filter must be key=value or key~value", file=sys.stderr)
-        print("  forms: name=X (exact), name~X (substring), type=X, text=X (substring)", file=sys.stderr)
+        print("  forms: name=X (exact), name~X (substring), type=X, text=X (exact), text~X (substring)", file=sys.stderr)
         return 2
 
-    if "~" in args.filter and args.filter.index("~") < args.filter.index("=") if "=" in args.filter else True:
+    # substring form (key~value) wins only when ~ comes before any =
+    eq_i = args.filter.find("=")
+    tilde_i = args.filter.find("~")
+    if tilde_i != -1 and (eq_i == -1 or tilde_i < eq_i):
         key, value = args.filter.split("~", 1)
         if key == "name":
             predicate = f"n.name.includes({json.dumps(value)})"
@@ -177,7 +184,7 @@ def cmd_text(args):
         f"if (!n) throw new Error('node not found');"
         f"if (n.type !== 'TEXT') throw new Error('not a TEXT node (got ' + n.type + ')');"
         f"const before = n.characters;"
-        f"await h.setText(n, {json.dumps(args.text)});"
+        f"await h.replaceText(n, {json.dumps(args.text)});"
         f"return {{id: n.id, before, after: n.characters}};"
     )
     return _emit(_exec(code, args.timeout)[1], raw=args.raw)
@@ -295,22 +302,24 @@ def cmd_img(args):
     import base64
     import subprocess
     import tempfile
-    path = args.file
+    with open(args.file, "rb") as f:
+        data = f.read()
     # Figma createImage limit: 4096px per side — auto-downscale via sips (macOS)
     try:
-        out = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", path],
+        out = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", args.file],
                              capture_output=True, text=True, timeout=15).stdout
         dims = [int(s.split()[-1]) for s in out.splitlines() if "pixel" in s]
         if dims and max(dims) > 4096:
-            tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False).name
-            subprocess.run(["sips", "-Z", "4096", path, "--out", tmp],
-                           capture_output=True, timeout=60)
-            path = tmp
-            print(f"mistok: downscaled to fit Figma 4096px limit", file=sys.stderr)
-    except Exception:
-        pass
-    with open(path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
+            with tempfile.TemporaryDirectory() as d:
+                tmp = os.path.join(d, os.path.basename(args.file))
+                subprocess.run(["sips", "-Z", "4096", args.file, "--out", tmp],
+                               capture_output=True, timeout=60)
+                with open(tmp, "rb") as f:
+                    data = f.read()
+            print("mistok: downscaled to fit Figma 4096px limit", file=sys.stderr)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass  # no sips (not macOS) — send as is
+    b64 = base64.b64encode(data).decode()
     code = (
         f"const n = await figma.getNodeByIdAsync({json.dumps(args.node_id)});"
         f"if (!n) throw new Error('node not found: ' + {json.dumps(args.node_id)});"
@@ -322,12 +331,11 @@ def cmd_img(args):
 
 
 def cmd_import(args):
-    import os
     import subprocess
     home = os.path.dirname(os.path.realpath(__file__))
-    py = os.path.join(home, "venv", "bin", "python")
+    py = os.path.join(home, "venv", "bin", "python")  # playwright lives in the venv
     return subprocess.run([py, os.path.join(home, "webimport.py"), args.url,
-                           "--width", str(args.width)]).returncode
+                           "--width", str(args.width), "--port", str(PORT)]).returncode
 
 
 def cmd_vars(args):
@@ -337,6 +345,26 @@ def cmd_vars(args):
     print(json.dumps(resp["value"], ensure_ascii=False, separators=(",", ":")))
     print(f"  ({resp.get('elapsed_ms', '?')}ms)", file=sys.stderr)
     return 0
+
+
+def cmd_styles(args):
+    _status, resp = _exec("return await h.stylesDump();", args.timeout)
+    if not resp.get("ok"):
+        return _emit(resp)
+    print(json.dumps(resp["value"], ensure_ascii=False, separators=(",", ":")))
+    print(f"  ({resp.get('elapsed_ms', '?')}ms)", file=sys.stderr)
+    return 0
+
+
+def cmd_focus(args):
+    code = (
+        f"const n = await figma.getNodeByIdAsync({json.dumps(args.node_id)});"
+        f"if (!n) throw new Error('node not found: ' + {json.dumps(args.node_id)});"
+        f"figma.viewport.scrollAndZoomIntoView([n]);"
+        f"try {{ figma.currentPage.selection = [n]; }} catch (e) {{}}"
+        f"return {{id: n.id, name: n.name, w: Math.round(n.width || 0), h: Math.round(n.height || 0)}};"
+    )
+    return _emit(_exec(code, args.timeout)[1], raw=args.raw)
 
 
 # ─── argparse / dispatch ───────────────────────────────────────────────────
@@ -418,6 +446,13 @@ def build_parser():
     p_vars = sub.add_parser("vars")
     _add_common_flags(p_vars)
 
+    p_styles = sub.add_parser("styles")
+    _add_common_flags(p_styles)
+
+    p_focus = sub.add_parser("focus")
+    _add_common_flags(p_focus)
+    p_focus.add_argument("node_id")
+
     p_sel = sub.add_parser("sel")
     _add_common_flags(p_sel)
 
@@ -468,6 +503,8 @@ def main():
         "shot": cmd_shot,
         "spec": cmd_spec,
         "vars": cmd_vars,
+        "styles": cmd_styles,
+        "focus": cmd_focus,
         "sel": cmd_sel,
         "img": cmd_img,
         "import": cmd_import,
